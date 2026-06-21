@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(conda run *)",
-      "Bash(D:/wenjian/conda/envs/bci/python.exe *)"
+      "Bash(D:/wenjian/conda/envs/bci/python.exe *)",
+      "Bash(git add *)"
     ]
   }
 }

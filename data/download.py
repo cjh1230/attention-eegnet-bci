@@ -37,11 +37,11 @@ def download_physionet_mi(output_dir: Path):
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print("Downloading PhysioNet MI dataset...")
-    print("  Subjects: 1–10")
+    print("  Subjects: 1–30")
     print("  Runs: 4, 8, 12 (MI left/right fist)")
 
     all_raws = []
-    for subject in range(1, 11):
+    for subject in range(1, 31):
         subject_dir = output_dir / f"subj_{subject:02d}"
         subject_dir.mkdir(exist_ok=True)
 

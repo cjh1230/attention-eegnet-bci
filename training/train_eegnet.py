@@ -78,7 +78,7 @@ def train(
     val_loader = DataLoader(val_ds, batch_size=batch_size)
 
     # ---- Model ----
-    model = EEGNet(n_channels=n_channels, n_classes=n_classes)
+    model = EEGNet(n_channels=n_channels, n_classes=n_classes, F1=8, D=2, F2=16)
     model = model.to(device)
 
     # Class-balanced loss

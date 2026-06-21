@@ -19,6 +19,13 @@ sys.path.insert(0, str(ROOT))
 
 from utils.config import SFREQ, FREQ_BANDS, T_MIN, T_MAX
 
+# Motor-cortex 16-channel subset (10-10 system) for MI classification
+MOTOR_16_CHANNELS = [
+    "Fc5.", "Fc3.", "Fc1.", "Fcz.", "Fc2.", "Fc4.", "Fc6.",
+    "C5..", "C3..", "C1..", "Cz..", "C2..", "C4..", "C6..",
+    "Cp3.", "Cp4.",
+]
+
 
 def find_eeg_files(input_path: Path) -> list[Path]:
     exts = {".edf", ".fif", ".gdf", ".set", ".bdf", ".vhdr"}
@@ -48,6 +55,8 @@ def load_and_filter(file_path: Path) -> mne.io.Raw:
 
     raw.filter(FREQ_BANDS["full"][0], FREQ_BANDS["full"][1], fir_design="firwin", verbose=False)
     raw.notch_filter(50.0, fir_design="firwin", verbose=False)
+    # Common Average Reference — removes shared noise across channels
+    raw.set_eeg_reference("average", verbose=False)
     return raw
 
 
@@ -60,9 +69,19 @@ def extract_events(raw: mne.io.Raw) -> np.ndarray:
     return events
 
 
-def process_subject(fp: Path) -> tuple[np.ndarray, np.ndarray] | None:
+def process_subject(fp: Path, channel_picks: list[str] | None = None) -> tuple[np.ndarray, np.ndarray] | None:
     """Process one subject file and return (X, y) arrays."""
     raw = load_and_filter(fp)
+
+    # Select specific channels if requested
+    if channel_picks is not None:
+        available = [ch for ch in channel_picks if ch in raw.ch_names]
+        if len(available) < len(channel_picks):
+            missing = set(channel_picks) - set(available)
+            print(f"    WARNING: missing channels: {missing}")
+        raw.pick(available)
+        print(f"    Picked {len(available)} motor channels")
+
     events = extract_events(raw)
     if len(events) == 0:
         return None
@@ -82,7 +101,7 @@ def process_subject(fp: Path) -> tuple[np.ndarray, np.ndarray] | None:
         raw, events_remapped,
         event_id={str(k): k for k in event_id_map.values()},
         tmin=T_MIN, tmax=T_MAX,
-        baseline=(T_MIN, 0),
+        baseline=None,
         preload=True, verbose=False,
     )
 
@@ -104,7 +123,17 @@ def main():
     parser.add_argument("--output", default="data/processed", help="Output directory")
     parser.add_argument("--ica", action="store_true", help="Apply ICA artifact removal")
     parser.add_argument("--max-channels", type=int, default=64, help="Cap channels to first N")
+    parser.add_argument("--channels", default="motor16", choices=["motor16", "all"],
+                        help="Channel preset: motor16 (C3/Cz/C4 area) or all (64ch)")
+    parser.add_argument("--binary", action="store_true",
+                        help="Binary classification: left vs right only (drop T0/rest)")
     args = parser.parse_args()
+
+    # Resolve channel picks
+    if args.channels == "motor16":
+        channel_picks = MOTOR_16_CHANNELS
+    else:
+        channel_picks = None
 
     files = find_eeg_files(Path(args.input))
     if not files:
@@ -118,14 +147,13 @@ def main():
 
     for i, fp in enumerate(files):
         print(f"\n[{i+1}/{len(files)}] {fp.parent.name}/{fp.name}")
-        result = process_subject(fp)
+        result = process_subject(fp, channel_picks)
         if result is None:
             continue
         X, y = result
 
-        # Ensure consistent channel count
-        if X.shape[1] > args.max_channels:
-            # Keep first N channels (for PhysioNet 64ch data)
+        # Ensure consistent channel count (only when using "all" mode)
+        if channel_picks is None and X.shape[1] > args.max_channels:
             X = X[:, :args.max_channels, :]
 
         all_X.append(X)
@@ -141,6 +169,15 @@ def main():
     y_all = np.concatenate(all_y, axis=0)
     print(f"\nTotal: X={X_all.shape}, y={y_all.shape}")
     print(f"Classes: {np.unique(y_all, return_counts=True)}")
+
+    # Binary mode: drop rest (label 0), remap left→0, right→1
+    if args.binary:
+        mask = y_all != 0
+        X_all = X_all[mask]
+        y_all = y_all[mask]
+        y_all = y_all - 1  # remap: 1→0 (left), 2→1 (right)
+        print(f"Binary mode: X={X_all.shape}, y={y_all.shape}")
+        print(f"Classes: {np.unique(y_all, return_counts=True)}")
 
     # Train/val split (subject-independent: 75/25)
     try:
