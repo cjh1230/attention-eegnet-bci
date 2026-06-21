@@ -17,7 +17,7 @@ from sklearn.model_selection import train_test_split
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from utils.config import SFREQ, FREQ_BANDS, T_MIN, T_MAX, MOTOR_CHANNELS
+from utils.config import SFREQ, FREQ_BANDS, T_MIN, T_MAX, MOTOR_CHANNELS, MOTOR_CHANNELS_16
 
 
 def find_eeg_files(input_path: Path) -> list[Path]:
@@ -116,15 +116,19 @@ def main():
     parser.add_argument("--output", default="data/processed", help="Output directory")
     parser.add_argument("--ica", action="store_true", help="Apply ICA artifact removal")
     parser.add_argument("--max-channels", type=int, default=64, help="Cap channels to first N")
-    parser.add_argument("--channels", default="motor16", choices=["motor16", "all"],
-                        help="Channel preset: motor16 (C3/Cz/C4 area) or all (64ch)")
+    parser.add_argument("--channels", default="motor8", choices=["motor8", "motor16", "all"],
+                        help="Channel preset: motor8 (8ch), motor16 (16ch), or all")
     parser.add_argument("--binary", action="store_true",
                         help="Binary classification: left vs right only (drop T0/rest)")
+    parser.add_argument("--per_subject", action="store_true",
+                        help="Save each subject as individual .npy files for LOSO training")
     args = parser.parse_args()
 
     # Resolve channel picks
-    if args.channels == "motor16":
+    if args.channels == "motor8":
         channel_picks = MOTOR_CHANNELS
+    elif args.channels == "motor16":
+        channel_picks = MOTOR_CHANNELS_16
     else:
         channel_picks = None
 
@@ -176,6 +180,24 @@ def main():
         y_all = y_all - 1  # remap: 1→0 (left), 2→1 (right)
         print(f"Binary mode: X={X_all.shape}, y={y_all.shape}")
         print(f"Classes: {np.unique(y_all, return_counts=True)}")
+
+    # ---- Per-subject output mode (for LOSO) ----
+    if args.per_subject:
+        output_dir = Path(args.output)
+        for i, (X_subj, y_subj) in enumerate(zip(all_X, all_y)):
+            # Apply binary filter per-subject if requested
+            if args.binary:
+                mask = y_subj != 0
+                X_subj = X_subj[mask]
+                y_subj = y_subj[mask]
+                y_subj = y_subj - 1  # remap: 1→0 (left), 2→1 (right)
+            subj_dir = output_dir / f"subj_{i+1:02d}"
+            subj_dir.mkdir(parents=True, exist_ok=True)
+            np.save(subj_dir / "X.npy", X_subj.astype(np.float32))
+            np.save(subj_dir / "y.npy", y_subj.astype(np.int64))
+            print(f"Saved {subj_dir}/: X={X_subj.shape}, y={y_subj.shape}")
+        print(f"\nPer-subject data saved to {output_dir}/subj_*/ for {len(all_X)} subjects")
+        return
 
     # Train/val split (subject-independent: 75/25)
     try:

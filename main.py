@@ -60,7 +60,7 @@ def cmd_demo():
     import torch
     from models.eegnet import EEGNet
 
-    model = EEGNet(n_channels=16, n_classes=3)
+    model = EEGNet(n_channels=N_CHANNELS, n_classes=3)
     model.eval()
 
     buffer = RingBuffer()
