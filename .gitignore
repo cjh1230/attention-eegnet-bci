@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+dist/
+build/
+
+# Virtual env
+venv/
+.venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Data (large files)
+data/raw/*
+data/processed/*
+data/subjects/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/subjects/.gitkeep
+
+# Models / checkpoints
+*.pth
+*.pt
+checkpoints/
+runs/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
