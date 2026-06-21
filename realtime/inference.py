@@ -6,8 +6,6 @@ Connects stream → buffer → model → action output.
 import numpy as np
 import torch
 
-from utils.config import N_CHANNELS, SFREQ
-
 
 class MIInference:
     """

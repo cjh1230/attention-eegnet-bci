@@ -13,11 +13,11 @@ CHECKPOINT_DIR = ROOT / "checkpoints"
 # --- EEG Hardware ---
 N_CHANNELS = 16
 SFREQ = 250  # Hz (DeepBCI default; adjust per device)
-CHANNEL_NAMES = [
-    "Fp1", "Fp2", "F3", "F4",
-    "C3", "C4", "P3", "P4",
-    "O1", "O2", "F7", "F8",
-    "T3", "T4", "T5", "T6",
+# 16 motor-cortex channels (10-10 system) — motor imagery sweet spot
+MOTOR_CHANNELS = [
+    "Fc5.", "Fc3.", "Fc1.", "Fcz.", "Fc2.", "Fc4.", "Fc6.",
+    "C5..", "C3..", "C1..", "Cz..", "C2..", "C4..", "C6..",
+    "Cp3.", "Cp4.",
 ]
 
 # --- MI Paradigm ---
@@ -27,9 +27,9 @@ FREQ_BANDS = {
     "full": (8, 30),
 }
 EVENT_IDS = {
-    "left_hand": 0,
-    "right_hand": 1,
-    "idle": 2,
+    "rest": 0,
+    "left_hand": 1,
+    "right_hand": 2,
 }
 T_MIN, T_MAX = -0.5, 2.5  # epoch window around cue (s)
 

@@ -41,6 +41,7 @@ def train_one_config(
     model: nn.Module,
     train_loader,
     val_loader,
+    y_train: np.ndarray,
     device,
     epochs: int,
     lr: float,
@@ -48,7 +49,7 @@ def train_one_config(
 ) -> dict:
     """Train a single model config and return final metrics."""
     class_weights = compute_class_weight(
-        "balanced", classes=np.arange(3), y=[0, 1, 2]
+        "balanced", classes=np.unique(y_train), y=y_train
     )
     criterion = nn.CrossEntropyLoss(
         weight=torch.tensor(class_weights, dtype=torch.float32, device=device)
@@ -114,7 +115,7 @@ def main():
     for label, model in configs.items():
         print(f"\nTraining: {label}")
         results[label] = train_one_config(
-            model, train_loader, val_loader, device, EPOCHS, LEARNING_RATE, label
+            model, train_loader, val_loader, y_train, device, EPOCHS, LEARNING_RATE, label
         )
 
     print("\n" + "=" * 60)

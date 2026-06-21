@@ -17,13 +17,11 @@ class MultiBandFusion(nn.Module):
     def __init__(
         self,
         n_channels: int = 16,
-        n_times: int = 750,
         n_classes: int = 3,
         hidden: int = 64,
     ):
         super().__init__()
         self.n_channels = n_channels
-        self.n_times = n_times
         self.n_classes = n_classes
 
         # Shared backbone per band

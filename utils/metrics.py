@@ -37,4 +37,6 @@ def classification_report(y_true, y_pred, class_names=None):
 def per_class_accuracy(y_true, y_pred):
     """Return per-class accuracy given integer labels."""
     cm = confusion_matrix(y_true, y_pred)
-    return np.diag(cm).astype(float) / cm.sum(axis=1)
+    row_sums = cm.sum(axis=1)
+    row_sums = np.where(row_sums == 0, 1, row_sums)  # avoid div by zero
+    return np.diag(cm).astype(float) / row_sums

@@ -17,14 +17,7 @@ from sklearn.model_selection import train_test_split
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from utils.config import SFREQ, FREQ_BANDS, T_MIN, T_MAX
-
-# Motor-cortex 16-channel subset (10-10 system) for MI classification
-MOTOR_16_CHANNELS = [
-    "Fc5.", "Fc3.", "Fc1.", "Fcz.", "Fc2.", "Fc4.", "Fc6.",
-    "C5..", "C3..", "C1..", "Cz..", "C2..", "C4..", "C6..",
-    "Cp3.", "Cp4.",
-]
+from utils.config import SFREQ, FREQ_BANDS, T_MIN, T_MAX, MOTOR_CHANNELS
 
 
 def find_eeg_files(input_path: Path) -> list[Path]:
@@ -131,7 +124,7 @@ def main():
 
     # Resolve channel picks
     if args.channels == "motor16":
-        channel_picks = MOTOR_16_CHANNELS
+        channel_picks = MOTOR_CHANNELS
     else:
         channel_picks = None
 
@@ -143,7 +136,6 @@ def main():
     print(f"Found {len(files)} file(s)")
 
     all_X, all_y = [], []
-    subj_labels = []
 
     for i, fp in enumerate(files):
         print(f"\n[{i+1}/{len(files)}] {fp.parent.name}/{fp.name}")
@@ -158,7 +150,6 @@ def main():
 
         all_X.append(X)
         all_y.append(y)
-        subj_labels.extend([i] * len(y))
 
     if not all_X:
         print("No valid subjects processed.")

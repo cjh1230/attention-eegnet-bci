@@ -2,7 +2,6 @@
 Artifact removal helpers (ICA-based).
 """
 import mne
-import numpy as np
 
 
 def apply_ica(
@@ -18,8 +17,11 @@ def apply_ica(
         random_state=random_state,
     )
     ica.fit(raw)
-    # Auto-detect EOG artifacts (if EOG channels present)
-    eog_indices, _ = ica.find_bads_eog(raw, ch_name=None, verbose=False)
-    ica.exclude = eog_indices
+    # Auto-detect EOG artifacts (silently skip if no EOG channels)
+    try:
+        eog_indices, _ = ica.find_bads_eog(raw, ch_name=None, verbose=False)
+        ica.exclude = eog_indices
+    except RuntimeError:
+        pass  # no EOG channels available
     raw_clean = ica.apply(raw.copy())
     return raw_clean

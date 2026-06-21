@@ -27,6 +27,23 @@ sys.path.insert(0, str(ROOT))
 from models.eegnet import EEGNet
 from utils.config import BATCH_SIZE, EPOCHS as DEFAULT_EPOCHS, LEARNING_RATE
 from utils.metrics import classification_report, per_class_accuracy
+from sklearn.metrics import confusion_matrix
+
+
+def load_checkpoint(ckpt_path: str, device: str = "cpu") -> EEGNet:
+    """Load a saved EEGNet checkpoint, handling lazy classifier init."""
+    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+    cfg = ckpt["config"]
+    model = EEGNet(n_channels=cfg["n_channels"], n_classes=cfg["n_classes"])
+    # Warm-up forward to build the lazy classifier
+    dummy = torch.zeros(1, cfg["n_channels"], cfg.get("n_times", 750))
+    model.eval()
+    with torch.no_grad():
+        model(dummy)
+    model.load_state_dict(ckpt["state_dict"])
+    model = model.to(device).eval()
+    print(f"Loaded checkpoint: epoch={ckpt['epoch']}, acc={ckpt['acc']:.4f}")
+    return model
 from utils.logger import ExperimentLogger
 
 
@@ -93,6 +110,8 @@ def train(
 
     best_acc = 0.0
     best_ckpt = None
+    best_preds = None
+    best_labels = None
 
     # ---- Training Loop ----
     for epoch in range(1, epochs + 1):
@@ -146,6 +165,8 @@ def train(
         # Save best
         if metrics["accuracy"] > best_acc:
             best_acc = metrics["accuracy"]
+            best_preds = y_pred.copy()
+            best_labels = y_true.copy()
             best_ckpt = {
                 "epoch": epoch,
                 "state_dict": model.state_dict(),
@@ -165,11 +186,12 @@ def train(
     torch.save(best_ckpt, ckpt_file)
     print(f"Best checkpoint saved to {ckpt_file} (acc={best_acc:.4f})")
 
-    # ---- Final Eval ----
-    print("\nPer-class accuracy:")
-    pca = per_class_accuracy(y_true, y_pred)
+    # ---- Final Eval (best epoch) ----
+    print(f"\nPer-class accuracy (best epoch {best_ckpt['epoch']}):")
+    pca = per_class_accuracy(best_labels, best_preds)
     for i, acc in enumerate(pca):
         print(f"  Class {i}: {acc:.4f}")
+    print(f"  Confusion matrix:\n{confusion_matrix(best_labels, best_preds)}")
 
     logger.close()
     return model, best_ckpt

@@ -16,7 +16,6 @@ Quick start (first time):
 """
 import subprocess
 import sys
-import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -89,7 +88,7 @@ def cmd_dashboard():
     """Launch Streamlit dashboard."""
     import subprocess
     subprocess.run([
-        "D:/wenjian/conda/envs/bci/python.exe",
+        sys.executable,
         "-m", "streamlit", "run", str(ROOT / "ui" / "dashboard.py"),
     ], cwd=str(ROOT))
 

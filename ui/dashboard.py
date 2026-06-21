@@ -19,7 +19,7 @@ try:
 except ImportError:
     HAS_STREAMLIT = False
 
-from utils.config import N_CHANNELS, CHANNEL_NAMES, BUFFER_WINDOW
+from utils.config import N_CHANNELS, BUFFER_WINDOW
 
 
 def main():
@@ -28,33 +28,33 @@ def main():
         return
 
     st.set_page_config(page_title="MI-BCI Dashboard", layout="wide")
-    st.title("🧠 运动想象 BCI 实时监控")
-    st.caption("Motor Imagery — Brain-Computer Interface Dashboard")
+    st.title("MI-BCI Real-time Monitor")
+    st.caption("Motor Imagery -- Brain-Computer Interface Dashboard")
 
     # Sidebar controls
-    st.sidebar.header("控制面板")
-    running = st.sidebar.toggle("启动实时推理", value=False)
-    threshold = st.sidebar.slider("置信度阈值", 0.0, 1.0, 0.6, 0.05)
+    st.sidebar.header("Controls")
+    running = st.sidebar.toggle("Start Inference", value=False)
+    threshold = st.sidebar.slider("Confidence Threshold", 0.0, 1.0, 0.6, 0.05)
 
     st.sidebar.markdown("---")
-    st.sidebar.markdown("### 设备状态")
-    st.sidebar.metric("采样率", "250 Hz", help="DeepBCI 默认采样率")
-    st.sidebar.metric("通道数", "16")
-    st.sidebar.metric("缓冲区窗口", f"{BUFFER_WINDOW}s")
+    st.sidebar.markdown("### Device Status")
+    st.sidebar.metric("Sample Rate", "250 Hz", help="DeepBCI default")
+    st.sidebar.metric("Channels", "16")
+    st.sidebar.metric("Buffer Window", f"{BUFFER_WINDOW}s")
 
     # Main layout
     col1, col2 = st.columns([2, 1])
 
     with col1:
-        st.subheader("EEG 波形")
+        st.subheader("EEG Waveform")
         chart_placeholder = st.empty()
 
     with col2:
-        st.subheader("预测结果")
+        st.subheader("Prediction")
         pred_placeholder = st.empty()
-        st.subheader("置信度")
+        st.subheader("Confidence")
         conf_placeholder = st.empty()
-        st.subheader("动作")
+        st.subheader("Action")
         action_placeholder = st.empty()
 
     # Simulated data loop
@@ -67,7 +67,7 @@ def main():
         model.eval()
 
         history = np.zeros((N_CHANNELS, 100))  # rolling display
-        labels = {0: "⏸ Idle", 1: "👈 Left", 2: "👉 Right"}
+        labels = {0: "[IDLE]", 1: "[LEFT]", 2: "[RIGHT]"}
         colors = {0: "gray", 1: "blue", 2: "red"}
 
         while running:
@@ -96,18 +96,16 @@ def main():
             )
             conf_placeholder.progress(float(conf))
             action_placeholder.markdown(
-                f"# {'←' if class_id == 1 else '→' if class_id == 2 else '−'}"
+                f"# {'<-' if class_id == 1 else '->' if class_id == 2 else '--'}"
             )
 
             time.sleep(0.125)
 
     else:
-        st.info("点击侧边栏「启动实时推理」开始")
+        st.info("Click 'Start Inference' in the sidebar to begin")
 
 
 if __name__ == "__main__":
-    if HAS_STREAMLIT:
-        main()
-    else:
-        import os
-        os.system("streamlit run ui/dashboard.py")
+    if not HAS_STREAMLIT:
+        raise ImportError("Streamlit not installed. Run: pip install streamlit")
+    main()
