@@ -22,6 +22,24 @@ except ImportError:
 from utils.config import N_CHANNELS, BUFFER_WINDOW
 
 
+def _load_model():
+    """Load a trained EEGNet checkpoint, or return an untrained model with a warning."""
+    from models.eegnet import EEGNet
+
+    checkpoint_path = ROOT / "checkpoints" / "eegnet_best.pt"
+    if checkpoint_path.exists():
+        from training.train_eegnet import load_checkpoint
+        return load_checkpoint(str(checkpoint_path))
+    else:
+        st.warning(
+            "No trained model found. Predictions are random. "
+            "Run `python main.py train` first."
+        )
+        model = EEGNet(n_channels=N_CHANNELS, n_classes=3)
+        model.eval()
+        return model
+
+
 def main():
     if not HAS_STREAMLIT:
         print("Streamlit not installed. Run: pip install streamlit")
@@ -31,9 +49,18 @@ def main():
     st.title("MI-BCI Real-time Monitor")
     st.caption("Motor Imagery -- Brain-Computer Interface Dashboard")
 
+    # --- Session state init ---
+    if "buffer" not in st.session_state:
+        st.session_state.buffer = None
+    if "model" not in st.session_state:
+        st.session_state.model = None
+    if "history" not in st.session_state:
+        st.session_state.history = np.zeros((N_CHANNELS, 100))
+
     # Sidebar controls
     st.sidebar.header("Controls")
     running = st.sidebar.toggle("Start Inference", value=False)
+
     threshold = st.sidebar.slider("Confidence Threshold", 0.0, 1.0, 0.6, 0.05)
 
     st.sidebar.markdown("---")
@@ -57,51 +84,58 @@ def main():
         st.subheader("Action")
         action_placeholder = st.empty()
 
-    # Simulated data loop
     if running:
+        import torch
         from realtime.buffer import RingBuffer
-        from models.eegnet import EEGNet
 
-        buffer = RingBuffer()
-        model = EEGNet(n_channels=N_CHANNELS, n_classes=3)
-        model.eval()
+        # Lazy init model + buffer (once per session)
+        if st.session_state.model is None:
+            st.session_state.model = _load_model()
+        if st.session_state.buffer is None:
+            st.session_state.buffer = RingBuffer()
 
-        history = np.zeros((N_CHANNELS, 100))  # rolling display
+        model = st.session_state.model
+        buffer = st.session_state.buffer
+        history = st.session_state.history
+
         labels = {0: "[IDLE]", 1: "[LEFT]", 2: "[RIGHT]"}
         colors = {0: "gray", 1: "blue", 2: "red"}
 
-        while running:
-            # Synthetic data
-            chunk = np.random.randn(N_CHANNELS, int(250 * 0.125)) * 5.0
-            buffer.push(chunk)
-            data = buffer.read()
+        # Synthetic data chunk
+        chunk = np.random.randn(N_CHANNELS, int(250 * 0.125)) * 5.0
+        buffer.push(chunk)
+        data = buffer.read()
 
-            # Rolling display update
-            history = np.roll(history, -1, axis=-1)
-            history[:, -1] = data[:, 0]
+        # Rolling display update
+        history = np.roll(history, -1, axis=-1)
+        history[:, -1] = data[:, 0]
+        st.session_state.history = history
 
-            chart_placeholder.line_chart(history.T, height=300)
+        chart_placeholder.line_chart(history.T, height=300)
 
-            # Inference
-            import torch
-            tensor = torch.from_numpy(data).unsqueeze(0).float()
-            with torch.no_grad():
-                probs = torch.softmax(model(tensor), dim=-1).squeeze().numpy()
+        # Inference
+        tensor = torch.from_numpy(data).unsqueeze(0).float()
+        with torch.no_grad():
+            probs = torch.softmax(model(tensor), dim=-1).squeeze().numpy()
 
-            class_id = int(np.argmax(probs))
-            conf = float(probs[class_id])
+        class_id = int(np.argmax(probs))
+        conf = float(probs[class_id])
 
-            pred_placeholder.markdown(
-                f"### {labels.get(class_id, str(class_id))}"
-            )
-            conf_placeholder.progress(float(conf))
-            action_placeholder.markdown(
-                f"# {'<-' if class_id == 1 else '->' if class_id == 2 else '--'}"
-            )
+        pred_placeholder.markdown(
+            f"### {labels.get(class_id, str(class_id))}"
+        )
+        conf_placeholder.progress(float(conf))
+        action_placeholder.markdown(
+            f"# {'<-' if class_id == 1 else '->' if class_id == 2 else '--'}"
+        )
 
-            time.sleep(0.125)
+        # Re-run after a short delay to poll for new data
+        time.sleep(0.125)
+        st.rerun()
 
     else:
+        # Reset on stop
+        st.session_state.buffer = None
         st.info("Click 'Start Inference' in the sidebar to begin")
 
 

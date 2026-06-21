@@ -12,10 +12,8 @@ from sklearn.metrics import (
 )
 
 
-def classification_report(y_true, y_pred, class_names=None):
+def classification_report(y_true, y_pred):
     """Return dict of common metrics for BCI classification."""
-    if class_names is None:
-        class_names = ["Left", "Right", "Idle"]
 
     cm = confusion_matrix(y_true, y_pred)
     acc = accuracy_score(y_true, y_pred)

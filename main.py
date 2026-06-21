@@ -86,7 +86,6 @@ def cmd_demo():
 
 def cmd_dashboard():
     """Launch Streamlit dashboard."""
-    import subprocess
     subprocess.run([
         sys.executable,
         "-m", "streamlit", "run", str(ROOT / "ui" / "dashboard.py"),

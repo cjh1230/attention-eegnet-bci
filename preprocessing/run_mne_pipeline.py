@@ -155,6 +155,13 @@ def main():
         print("No valid subjects processed.")
         return
 
+    # Validate consistent channel count across subjects
+    n_channels_set = {x.shape[1] for x in all_X}
+    if len(n_channels_set) > 1:
+        print(f"ERROR: Inconsistent channel counts across subjects: {n_channels_set}")
+        print("  Ensure all subjects have the same channels, or use --channels all")
+        return
+
     # Aggregate
     X_all = np.concatenate(all_X, axis=0)
     y_all = np.concatenate(all_y, axis=0)

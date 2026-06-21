@@ -95,10 +95,7 @@ class LSLStream:
             return np.zeros((self.n_channels, self._chunk_size), dtype=np.float32)
 
         arr = np.array(samples, dtype=np.float32)
-        # (samples, channels) → (channels, samples)
-        if arr.shape[1] != self.n_channels:
-            # Re-order: LSL returns (time, channels)
-            pass
+        # LSL returns (time, channels) → transpose to (channels, time)
         return arr.T
 
     def close(self):

@@ -58,6 +58,8 @@ def train_one_config(
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
 
     best_acc = 0.0
+    best_preds = None
+    best_labels = None
     for epoch in range(1, epochs + 1):
         model.train()
         for Xb, yb in train_loader:
@@ -79,8 +81,10 @@ def train_one_config(
         acc = (torch.cat(all_preds) == torch.cat(all_labels)).float().mean().item()
         if acc > best_acc:
             best_acc = acc
+            best_preds = torch.cat(all_preds).clone().numpy()
+            best_labels = torch.cat(all_labels).clone().numpy()
 
-    metrics = classification_report(torch.cat(all_labels).numpy(), torch.cat(all_preds).numpy())
+    metrics = classification_report(best_labels, best_preds)
     print(f"  [{label}]  acc={best_acc:.4f}  kappa={metrics['kappa']:.4f}")
     return {"config": label, "best_acc": best_acc, **metrics}
 

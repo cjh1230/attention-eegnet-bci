@@ -26,6 +26,7 @@ sys.path.insert(0, str(ROOT))
 
 from models.eegnet import EEGNet
 from utils.config import BATCH_SIZE, EPOCHS as DEFAULT_EPOCHS, LEARNING_RATE
+from utils.logger import ExperimentLogger
 from utils.metrics import classification_report, per_class_accuracy
 from sklearn.metrics import confusion_matrix
 
@@ -44,7 +45,6 @@ def load_checkpoint(ckpt_path: str, device: str = "cpu") -> EEGNet:
     model = model.to(device).eval()
     print(f"Loaded checkpoint: epoch={ckpt['epoch']}, acc={ckpt['acc']:.4f}")
     return model
-from utils.logger import ExperimentLogger
 
 
 def load_data(data_dir: str) -> tuple[np.ndarray, ...]:
