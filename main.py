@@ -76,7 +76,7 @@ def cmd_demo():
             chunk = stream.read_chunk()
             buffer.push(chunk)
             class_id, conf = inference.predict()
-            labels = ["Idle", "Left", "Right"]
+            labels = ["[IDLE]", "[LEFT]", "[RIGHT]"]
             bar = "#" * int(conf * 20)
             print(f"  [{step:3d}] → {labels[class_id]:6s} | conf={conf:.2f} | {bar}")
     except KeyboardInterrupt:
@@ -87,9 +87,11 @@ def cmd_demo():
 
 def cmd_dashboard():
     """Launch Streamlit dashboard."""
-    import streamlit.web.cli as stcli
-    sys.argv = ["streamlit", "run", str(ROOT / "ui" / "dashboard.py")]
-    stcli.main()
+    import subprocess
+    subprocess.run([
+        "D:/wenjian/conda/envs/bci/python.exe",
+        "-m", "streamlit", "run", str(ROOT / "ui" / "dashboard.py"),
+    ], cwd=str(ROOT))
 
 
 COMMANDS = {

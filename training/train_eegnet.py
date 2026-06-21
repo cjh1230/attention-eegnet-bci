@@ -59,7 +59,6 @@ def train(
 
     X_train, y_train, X_val, y_val = load_data(data_dir)
     n_channels = X_train.shape[1]
-    n_times = X_train.shape[2]
     n_classes = len(np.unique(y_train))
 
     print(f"Train: X={X_train.shape}, y={y_train.shape}")
@@ -79,7 +78,7 @@ def train(
     val_loader = DataLoader(val_ds, batch_size=batch_size)
 
     # ---- Model ----
-    model = EEGNet(n_channels=n_channels, n_classes=n_classes, n_times=n_times)
+    model = EEGNet(n_channels=n_channels, n_classes=n_classes)
     model = model.to(device)
 
     # Class-balanced loss
@@ -155,7 +154,7 @@ def train(
                 "config": {
                     "n_channels": n_channels,
                     "n_classes": n_classes,
-                    "n_times": n_times,
+                    "n_times": X_train.shape[2],
                 },
             }
 

@@ -27,10 +27,10 @@ from utils.logger import ExperimentLogger
 class EEGNetWithAttention(nn.Module):
     """EEGNet preceded by a Channel Attention module."""
 
-    def __init__(self, n_channels, n_classes, n_times):
+    def __init__(self, n_channels, n_classes):
         super().__init__()
         self.attention = ChannelAttention1D(n_channels)
-        self.eegnet = EEGNet(n_channels, n_classes, n_times)
+        self.eegnet = EEGNet(n_channels, n_classes)
 
     def forward(self, x):
         x = self.attention(x)
@@ -95,7 +95,7 @@ def main():
     X_val = np.load(data_dir / "X_val.npy")
     y_val = np.load(data_dir / "y_val.npy")
 
-    n_channels, n_times = X_train.shape[1], X_train.shape[2]
+    n_channels = X_train.shape[1]
     n_classes = len(np.unique(y_train))
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -106,8 +106,8 @@ def main():
 
     # ---- Ablation Configs ----
     configs = {
-        "EEGNet (base)": EEGNet(n_channels, n_classes, n_times).to(device),
-        "EEGNet + Attn": EEGNetWithAttention(n_channels, n_classes, n_times).to(device),
+        "EEGNet (base)": EEGNet(n_channels, n_classes).to(device),
+        "EEGNet + Attn": EEGNetWithAttention(n_channels, n_classes).to(device),
     }
 
     results = {}

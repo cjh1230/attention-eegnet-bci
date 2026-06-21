@@ -13,14 +13,12 @@ BCI algorithm research using the Motor Imagery (MI) paradigm. 挑战杯 project 
 ## Environment Setup
 
 ```bash
-conda env create -f environment.yml
-conda activate bci
+conda env create -f environment.yml              # once
+conda activate bci                                # per session
+pip install mne streamlit plotly pytest black ruff  # pip deps (if not auto-installed)
 ```
 
-Or quickly:
-```bash
-python main.py setup
-```
+Python path: `D:/wenjian/conda/envs/bci/python.exe`
 
 ## Tech Stack
 
@@ -28,7 +26,7 @@ python main.py setup
 |-------|--------|
 | Python | 3.10 |
 | Preprocessing | MNE-Python (offline pipeline) |
-| Deep Learning | PyTorch 2.x |
+| Deep Learning | PyTorch 2.5.1 |
 | Real-time | LSL (pylsl) or simulated stream |
 | UI | Streamlit |
 | Env | conda (environment.yml) |
@@ -58,14 +56,16 @@ bci_project/
 
 ## Commands (via main.py)
 
+All use `D:/wenjian/conda/envs/bci/python.exe`:
+
 ```bash
 python main.py setup          # Create conda environment
-python main.py preprocess     # Run MNE pipeline on data/raw/
-python main.py baseline       # CSP+SVM baseline
+python main.py preprocess     # Run MNE pipeline on data/raw/  →  data/processed/
+python main.py baseline       # CSP + SVM baseline
 python main.py train          # Train EEGNet
-python main.py ablation       # Ablation study
-python main.py demo           # Real-time terminal demo
-python main.py dashboard      # Streamlit dashboard (streamlit run ui/dashboard.py)
+python main.py ablation       # Ablation study (EEGNet vs +Attn)
+python main.py demo           # Real-time terminal demo (100 steps)
+python main.py dashboard      # Streamlit dashboard
 ```
 
 ## Key Conventions

@@ -12,6 +12,9 @@ import torch.nn as nn
 class EEGNet(nn.Module):
     """
     EEGNet for Motor Imagery classification.
+    Handles arbitrary time lengths (lazy linear init).
+
+    Reference: Lawhern et al. 2018 (doi:10.1088/1741-2552/aace8c)
 
     Parameters
     ----------
@@ -19,8 +22,6 @@ class EEGNet(nn.Module):
         Number of EEG channels.
     n_classes : int
         Number of output classes.
-    n_times : int
-        Number of time samples per trial.
     F1 : int
         Number of temporal filters.
     D : int
@@ -35,7 +36,6 @@ class EEGNet(nn.Module):
         self,
         n_channels: int = 16,
         n_classes: int = 3,
-        n_times: int = 750,
         F1: int = 8,
         D: int = 2,
         F2: int = 16,
@@ -44,6 +44,9 @@ class EEGNet(nn.Module):
         super().__init__()
         self.n_channels = n_channels
         self.n_classes = n_classes
+        self.F1 = F1
+        self.D = D
+        self.F2 = F2
 
         # Block 1: Temporal → Spatial
         self.conv1 = nn.Sequential(
@@ -79,23 +82,16 @@ class EEGNet(nn.Module):
             nn.Dropout(dropout),
         )
 
-        # Classifier
+        # Classifier built lazily on first forward pass (to handle variable T)
+        self.classifier = None
+
+    def _build_classifier(self, n_features: int):
+        """Create the linear classifier once we know the flattened dim."""
         self.classifier = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(self._fc_in_features(n_channels, n_times, F1, D, F2), n_classes),
+            nn.Linear(n_features, self.n_classes),
         )
-
-    def _fc_in_features(self, C, T, F1, D, F2):
-        """Compute flattened feature dim after conv layers."""
-        with torch.no_grad():
-            x = torch.zeros(1, 1, C, T)
-            x = self.conv1(x)
-            x = self.depthwise(x)
-            x = self.bn_depth(x)
-            x = self.act1(x)
-            x = self.pool1(x)
-            x = self.separable(x)
-            return x.numel()
+        self.classifier.to(next(self.parameters()).device)
 
     def forward(self, x):
         # x: (B, C, T) → (B, 1, C, T)
@@ -108,4 +104,10 @@ class EEGNet(nn.Module):
         x = self.pool1(x)
         x = self.drop1(x)
         x = self.separable(x)
+
+        # Lazy init
+        if self.classifier is None:
+            n_features = x.reshape(x.size(0), -1).size(1)
+            self._build_classifier(n_features)
+
         return self.classifier(x)

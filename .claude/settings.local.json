@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(conda run *)",
+      "Bash(D:/wenjian/conda/envs/bci/python.exe *)"
+    ]
+  }
+}
