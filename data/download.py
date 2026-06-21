@@ -100,9 +100,76 @@ def download_mne_sample(output_dir: Path):
     return data_path
 
 
+def download_bci_iv_2a(output_dir: Path):
+    """
+    Download BCI Competition IV dataset 2a via MOABB.
+
+    Dataset 2a: 9 subjects, 22 EEG channels @ 250 Hz, 4-class MI
+    (left hand, right hand, feet, tongue).
+    This is the standard benchmark for MI classification.
+    """
+    import numpy as np
+
+    output_dir = Path(output_dir) / "bci_iv_2a"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        from moabb.datasets import BNCI2014_001
+        from moabb.paradigms import MotorImagery
+    except ImportError:
+        print("MOABB not installed. Run: pip install moabb")
+        return None
+
+    print("Downloading BCI Competition IV dataset 2a via MOABB...")
+    print("  9 subjects, 22 EEG channels @ 250 Hz, 4-class MI")
+    print("  (left_hand, right_hand, feet, tongue)")
+
+    dataset = BNCI2014_001()
+    paradigm = MotorImagery(
+        events=["left_hand", "right_hand", "feet", "tongue"],
+        n_classes=4,
+    )
+
+    # Label mapping: string → int
+    label_map = {"left_hand": 0, "right_hand": 1, "feet": 2, "tongue": 3}
+
+    X_list, y_list = [], []
+    for subject in dataset.subject_list:
+        print(f"  Subject {subject}...", end=" ")
+        try:
+            X, y_str, meta = paradigm.get_data(
+                dataset=dataset, subjects=[subject]
+            )
+            # Map string labels to ints
+            y_int = np.array([label_map[s] for s in y_str], dtype=np.int64)
+            X_list.append(X.astype(np.float32))
+            y_list.append(y_int)
+            print(f"X={X.shape}, y={X.shape[0]} trials")
+        except Exception as e:
+            print(f"FAILED: {e}")
+            continue
+
+    if X_list:
+        X_all = np.concatenate(X_list, axis=0)
+        y_all = np.concatenate(y_list, axis=0)
+        print(f"\n  Total: X={X_all.shape}, y={y_all.shape}")
+        print(f"  Classes: {np.unique(y_all, return_counts=True)}")
+
+        # Save as .npy
+        np.save(str(output_dir / "X.npy"), X_all)
+        np.save(str(output_dir / "y.npy"), y_all)
+        print(f"  Saved to {output_dir}/")
+    else:
+        print("  No data downloaded.")
+
+    print(f"\n✅ BCI IV 2a → {output_dir}")
+    return output_dir
+
+
 def main():
     parser = argparse.ArgumentParser(description="Download public EEG datasets")
     parser.add_argument("--sample", action="store_true", help="Download MNE sample (quick)")
+    parser.add_argument("--bci_iv_2a", action="store_true", help="Download BCI Competition IV 2a")
     parser.add_argument("--output", default="data/raw", help="Output directory")
     args = parser.parse_args()
 
@@ -110,6 +177,8 @@ def main():
 
     if args.sample:
         download_mne_sample(output_dir)
+    elif args.bci_iv_2a:
+        download_bci_iv_2a(output_dir)
     else:
         download_physionet_mi(output_dir)
 

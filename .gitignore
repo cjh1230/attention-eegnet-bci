@@ -20,16 +20,25 @@ env/
 # Data (large files)
 data/raw/*
 data/processed/*
+data/processed_*/
+data/loso_*/
 data/subjects/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 !data/subjects/.gitkeep
+!data/download.py
 
 # Models / checkpoints
 *.pth
 *.pt
 checkpoints/
 runs/
+
+# MOABB / MNE cache artifacts
+C-/
+
+# Logs
+logs/
 
 # Jupyter
 .ipynb_checkpoints/

@@ -11,13 +11,30 @@ DATA_SUBJECTS = ROOT / "data" / "subjects"
 CHECKPOINT_DIR = ROOT / "checkpoints"
 
 # --- EEG Hardware ---
-N_CHANNELS = 16
+N_CHANNELS = 8   # DeepBCI 8ch
 SFREQ = 250  # Hz (DeepBCI default; adjust per device)
-# 16 motor-cortex channels (10-10 system) — motor imagery sweet spot
-MOTOR_CHANNELS = [
+
+# 8-channel motor-cortex montage (centered on C3/Cz/C4)
+# PhysioNet 10-10 naming (run_mne_pipeline picks available subset)
+MOTOR_CHANNELS_16 = [
     "Fc5.", "Fc3.", "Fc1.", "Fcz.", "Fc2.", "Fc4.", "Fc6.",
     "C5..", "C3..", "C1..", "Cz..", "C2..", "C4..", "C6..",
     "Cp3.", "Cp4.",
+]
+
+MOTOR_CHANNELS = [
+    "Fc3.",                    # FC3 — frontal-central
+    "C3..", "Cz..", "C4..",   # C3, Cz, C4 — primary motor
+    "Fc4.",                    # FC4 — frontal-central
+    "Cp3.", "Cpz.", "Cp4.",   # CP3, CPz, CP4 — central-parietal
+]
+
+# BCI IV 2a uses standard 10-20 names (no dots)
+MOTOR_CHANNELS_BCI4 = [
+    "FC3",                     # frontal-central
+    "C3", "Cz", "C4",         # primary motor
+    "FC4",                     # frontal-central
+    "CP3", "CPz", "CP4",      # central-parietal
 ]
 
 # --- MI Paradigm ---
