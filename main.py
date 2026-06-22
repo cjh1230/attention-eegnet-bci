@@ -7,6 +7,7 @@ Usage:
     python main.py baseline        # CSP+SVM baseline
     python main.py train           # Train EEGNet
     python main.py ablation        # Ablation study (EEGNet vs +Attn)
+    python main.py loso            # LOSO cross-validation (gold-standard BCI eval)
     python main.py demo            # Real-time demo (simulated stream)
     python main.py dashboard       # Streamlit dashboard
 
@@ -52,6 +53,10 @@ def cmd_ablation():
     run_py("training/train_ablation.py", *sys.argv[2:])
 
 
+def cmd_loso():
+    run_py("training/train_loso.py", *sys.argv[2:])
+
+
 def cmd_demo():
     print("Starting BCI real-time demo (simulated stream)...")
     from realtime.buffer import RingBuffer
@@ -59,6 +64,7 @@ def cmd_demo():
     from realtime.inference import MIInference
     import torch
     from models.eegnet import EEGNet
+    from utils.config import N_CHANNELS
 
     model = EEGNet(n_channels=N_CHANNELS, n_classes=3)
     model.eval()
@@ -98,6 +104,7 @@ COMMANDS = {
     "baseline": cmd_baseline,
     "train": cmd_train,
     "ablation": cmd_ablation,
+    "loso": cmd_loso,
     "demo": cmd_demo,
     "dashboard": cmd_dashboard,
 }

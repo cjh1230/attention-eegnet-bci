@@ -23,8 +23,12 @@ python preprocessing/run_mne_pipeline.py --channels motor8
 # 4. 训练基线
 python main.py baseline
 
-# 5. 训练 EEGNet
+# 5. 训练 EEGNet (随机分割，快速验证)
 python main.py train --model eegnet_spatiotemporal --augment
+
+# 6. LOSO 交叉验证 (金标准 BCI 评估)
+python preprocessing/run_mne_pipeline.py --channels motor8 --binary --per_subject --output data/loso_binary
+python main.py loso --data_dir data/loso_binary --epochs 60
 ```
 
 ---
@@ -81,7 +85,8 @@ python main.py train --model eegnet_spatiotemporal --augment
 │   ├── train_eegnet.py             # ★ 训练脚本 (6大特性)
 │   ├── train_baseline.py           #   CSP+SVM 基线
 │   ├── train_ablation.py           #   消融实验 (6配置 × N重复)
-│   └── train_sweep.py              #   超参搜索 (Optuna + 网格回退)
+│   ├── train_sweep.py              #   超参搜索 (Optuna + 网格回退)
+│   └── train_loso.py               #   LOSO 交叉验证 (金标准, +few-shot FT)
 ├── realtime/
 │   ├── stream_lsl.py               # LSL 真实设备流
 │   ├── stream.py                   # DummyStream (离线模拟)
@@ -140,6 +145,13 @@ python training/train_eegnet.py \
 
 python training/train_ablation.py --epochs 150 --repeat 3    # 6 模型 × 3 次
 python training/train_sweep.py --model eegnet --trials 50     # 超参搜索 (需 optuna)
+
+# === LOSO 交叉验证 (金标准 BCI 评估) ===
+# Step 1: 按被试导出 .npy
+python preprocessing/run_mne_pipeline.py --channels motor8 --binary --per_subject --output data/loso_binary
+# Step 2: 30-fold LOSO
+python main.py loso --data_dir data/loso_binary --n_subjects 30 --epochs 60
+python main.py loso --data_dir data/loso_binary --n_subjects 30 --finetune 10   # + few-shot fine-tune
 
 # === 实时 ===
 python main.py demo                  # 终端模拟 Demo
@@ -200,6 +212,9 @@ Input (B, 1, C, T)
 
 ## 实验结果 (PhysioNet MI, 30 人, 8 通道)
 
+> **验证方式**: 以下结果为 **随机 train/val split**（跨被试混洗），仅用于快速验证 pipeline 通断。
+> **比赛级评估**需使用 **LOSO (Leave-One-Subject-Out)** — 见下方 [验证方法论](#验证方法论)。
+
 | 模型 | 3-Class | 2-Class | 备注 |
 |------|---------|---------|------|
 | CSP + SVM | 38.6% | — | CSP-8 + 线性 SVM |
@@ -207,6 +222,16 @@ Input (B, 1, C, T)
 | **EEGNet + SpatiotemporalAttn** | **57.6%** | **63.0%** | +增强 +label_smoothing |
 
 > ⚠️ PhysioNet 的 3 分类存在天然数据不均衡 (Idle ≈ 50%)，真实的 "空闲-想象" 区分能力依赖自采数据验证。
+
+### 验证方法论
+
+| 方法 | 说明 | 适用场景 |
+|------|------|---------|
+| **Random split** | 混洗所有 trial 后 `train_test_split` | 快速 debug, 算法迭代 |
+| **LOSO** ⭐ | 29 人训练, 1 人测试, 轮 30 次 | **比赛报告, 论文, 泛化性评估** |
+| **LOSO + Few-shot FT** | LOSO 后用目标被试少量 trial 微调 | 在线系统标定 (calibration) |
+
+LOSO 是 BCI 领域的金标准 — 它直接回答"模型对新被试是否有效"，评委也会关注这点。
 
 ---
 

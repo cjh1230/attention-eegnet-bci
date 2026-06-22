@@ -114,6 +114,7 @@ python preprocessing/run_mne_pipeline.py --channels motor8        # explicit 8ch
 python preprocessing/run_mne_pipeline.py --channels motor16       # 16ch backward compat
 python preprocessing/run_mne_pipeline.py --channels all           # all 64 channels
 python preprocessing/run_mne_pipeline.py --binary                 # 2-class (left vs right)
+python preprocessing/run_mne_pipeline.py --dataset physionet_mi   # explicit dataset (auto-detect by default)
 ```
 
 ### Training (direct)
@@ -140,6 +141,11 @@ python training/train_eegnet.py --kfold 5                          # K-fold cros
 # Sweep & ablation
 python training/train_sweep.py --model eegnet --trials 50          # Optuna hyperparam search
 python training/train_ablation.py --epochs 150 --repeat 3          # 6 configs × 3 repeats
+
+# LOSO (Leave-One-Subject-Out) — gold-standard BCI evaluation
+python preprocessing/run_mne_pipeline.py --channels motor8 --binary --per_subject --output data/loso_binary
+python training/train_loso.py --data_dir data/loso_binary --n_subjects 30 --epochs 60
+python training/train_loso.py --data_dir data/loso_binary --n_subjects 30 --finetune 10  # + few-shot FT
 ```
 
 ### Reports
@@ -152,7 +158,10 @@ python utils/report_excel.py --input results.json      # From JSON results
 ## Key Conventions
 
 - **Data shape**: `X = [N, C, T]` float32, `y = [N]` int
-- **Labels**: 0=Idle, 1=Left, 2=Right
+- **Labels**: 0=Rest/Idle, 1=Left, 2=Right (canonical — enforced by `--dataset physionet_mi`)
+  - PhysioNet MI raw: annotations T0→0, T1→1, T2→2 (via `PHYSIONET_MI_EVENT_TO_LABEL`)
+  - BCI IV 2a raw: triggers 769→0(left), 770→1(right), 771→2(feet), 772→3(tongue)
+- **Validation**: LOSO (Leave-One-Subject-Out) is the gold standard. Random split is for debugging only.
 - **Hardware**: **8 channels** @ 250 Hz (DeepBCI)
 - **8ch Montage**: FC3, C3, Cz, C4, FC4, CP3, CPz, CP4
   - PhysioNet names: `Fc3. C3.. Cz.. C4.. Fc4. Cp3. Cpz. Cp4.`
@@ -245,6 +254,8 @@ MOTOR_CHANNELS_BCI4 = [
 ```
 
 ## Current Results (PhysioNet MI, 30 subjects, 8ch)
+
+> **Random split only** — for pipeline validation. Gold-standard LOSO results pending.
 
 | Model | 3-Class | 2-Class |
 |-------|---------|---------|

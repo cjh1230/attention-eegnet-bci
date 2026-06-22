@@ -17,7 +17,14 @@ from sklearn.model_selection import train_test_split
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from utils.config import SFREQ, FREQ_BANDS, T_MIN, T_MAX, MOTOR_CHANNELS, MOTOR_CHANNELS_16
+from utils.config import (
+    SFREQ, FREQ_BANDS, T_MIN, T_MAX,
+    MOTOR_CHANNELS, MOTOR_CHANNELS_16,
+    PHYSIONET_MI_EVENT_TO_LABEL,
+    PHYSIONET_MI_BINARY_EVENT_TO_LABEL,
+    BCI_IV_2A_EVENT_TO_LABEL,
+    DATASET_EVENT_SIGNATURES,
+)
 
 
 def find_eeg_files(input_path: Path) -> list[Path]:
@@ -53,17 +60,84 @@ def load_and_filter(file_path: Path) -> mne.io.Raw:
     return raw
 
 
-def extract_events(raw: mne.io.Raw) -> np.ndarray:
+def extract_events(raw: mne.io.Raw, dataset: str = "auto") -> tuple[np.ndarray, dict[int, int] | None]:
+    """
+    Extract events and return (events_array, label_map).
+
+    label_map is a dict from raw event ID → canonical label (0=rest, 1=left, 2=right, 3=foot, 4=tongue).
+    Returns None for label_map when using auto-detection with unrecognized event IDs.
+    """
+    # --- Try explicit annotation-based extraction first ---
+    if dataset == "physionet_mi":
+        event_id = {"T0": 1, "T1": 2, "T2": 3}
+        try:
+            events, _ = mne.events_from_annotations(raw, event_id=event_id, verbose=False)
+            label_map = PHYSIONET_MI_EVENT_TO_LABEL
+            print(f"    Events (PhysioNet MI, annotation): {len(events)}")
+            return events, label_map
+        except (ValueError, RuntimeError):
+            pass
+    elif dataset == "bci_iv_2a":
+        event_id = {"769": 769, "770": 770, "771": 771, "772": 772}
+        try:
+            events, _ = mne.events_from_annotations(raw, event_id=event_id, verbose=False)
+            label_map = BCI_IV_2A_EVENT_TO_LABEL
+            print(f"    Events (BCI IV 2a, annotation): {len(events)}")
+            return events, label_map
+        except (ValueError, RuntimeError):
+            pass
+
+    # --- Fallback: stim channel or generic annotation ---
     try:
         events = mne.find_events(raw, stim_channel="auto", verbose=False)
     except (ValueError, RuntimeError):
         events, _ = mne.events_from_annotations(raw, verbose=False)
-    print(f"    Events: {len(events)}")
-    return events
+
+    # Auto-detect dataset from event IDs
+    unique_ev = frozenset(np.unique(events[:, -1]))
+    if unique_ev.issubset(DATASET_EVENT_SIGNATURES["physionet_mi"]):
+        label_map = PHYSIONET_MI_EVENT_TO_LABEL
+        print(f"    Auto-detected: PhysioNet MI ({len(events)} events)")
+    elif unique_ev == DATASET_EVENT_SIGNATURES["bci_iv_2a"]:
+        label_map = BCI_IV_2A_EVENT_TO_LABEL
+        print(f"    Auto-detected: BCI IV 2a ({len(events)} events)")
+    else:
+        label_map = None  # fallback: sorted remap
+        print(f"    Events (generic fallback): {len(events)} — mapping sorted IDs→0,1,2...")
+
+    return events, label_map
 
 
-def process_subject(fp: Path, channel_picks: list[str] | None = None) -> tuple[np.ndarray, np.ndarray] | None:
-    """Process one subject file and return (X, y) arrays."""
+def apply_label_map(events: np.ndarray, label_map: dict[int, int] | None) -> np.ndarray:
+    """
+    Apply dataset-specific label mapping to events.
+    If label_map is None, falls back to sorted remapping (0,1,2...).
+    """
+    events_remapped = events.copy()
+    unique_ev = np.unique(events[:, -1])
+
+    if label_map is not None:
+        # Use explicit mapping; drop events not in the map
+        event_id_map = label_map
+        valid_mask = np.isin(events[:, -1], list(label_map.keys()))
+        events_remapped = events_remapped[valid_mask]
+        for old, new in event_id_map.items():
+            events_remapped[events_remapped[:, -1] == old, -1] = new
+    else:
+        # Generic fallback: sorted unique IDs → 0, 1, 2...
+        event_id_map = {v: i for i, v in enumerate(sorted(unique_ev))}
+        for old, new in event_id_map.items():
+            events_remapped[events[:, -1] == old, -1] = new
+
+    return events_remapped
+
+
+def process_subject(
+    fp: Path,
+    channel_picks: list[str] | None = None,
+    dataset: str = "auto",
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Process one subject file and return (X, y) arrays with canonical labels."""
     raw = load_and_filter(fp)
 
     # Select specific channels if requested
@@ -75,24 +149,20 @@ def process_subject(fp: Path, channel_picks: list[str] | None = None) -> tuple[n
         raw.pick(available)
         print(f"    Picked {len(available)} motor channels")
 
-    events = extract_events(raw)
+    events, label_map = extract_events(raw, dataset=dataset)
     if len(events) == 0:
         return None
 
-    unique_ev = np.unique(events[:, -1])
-    if len(unique_ev) < 2:
-        print(f"    Only {len(unique_ev)} event type(s) — skipping")
-        return None
+    events_remapped = apply_label_map(events, label_map)
 
-    # Remap event IDs to consecutive 0,1,2...
-    event_id_map = {v: i for i, v in enumerate(sorted(unique_ev))}
-    events_remapped = events.copy()
-    for old, new in event_id_map.items():
-        events_remapped[events[:, -1] == old, -1] = new
+    unique_ev = np.unique(events_remapped[:, -1])
+    if len(unique_ev) < 2:
+        print(f"    Only {len(unique_ev)} event type(s) after remap — skipping")
+        return None
 
     epochs = mne.Epochs(
         raw, events_remapped,
-        event_id={str(k): k for k in event_id_map.values()},
+        event_id={str(k): int(k) for k in unique_ev},
         tmin=T_MIN, tmax=T_MAX,
         baseline=None,
         preload=True, verbose=False,
@@ -122,6 +192,9 @@ def main():
                         help="Binary classification: left vs right only (drop T0/rest)")
     parser.add_argument("--per_subject", action="store_true",
                         help="Save each subject as individual .npy files for LOSO training")
+    parser.add_argument("--dataset", default="auto",
+                        choices=["auto", "physionet_mi", "bci_iv_2a"],
+                        help="Dataset for event→label mapping. 'auto' detects from event IDs.")
     args = parser.parse_args()
 
     # Resolve channel picks
@@ -143,7 +216,7 @@ def main():
 
     for i, fp in enumerate(files):
         print(f"\n[{i+1}/{len(files)}] {fp.parent.name}/{fp.name}")
-        result = process_subject(fp, channel_picks)
+        result = process_subject(fp, channel_picks, dataset=args.dataset)
         if result is None:
             continue
         X, y = result

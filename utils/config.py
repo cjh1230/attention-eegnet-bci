@@ -48,6 +48,33 @@ EVENT_IDS = {
     "left_hand": 1,
     "right_hand": 2,
 }
+
+# --- Dataset-specific event → label mappings ---
+# PhysioNet MI (eegbci): annotations 'T0'/'T1'/'T2' mapped to 1/2/3 by MNE
+PHYSIONET_MI_EVENT_TO_LABEL = {
+    1: 0,   # T0 → rest
+    2: 1,   # T1 → left fist
+    3: 2,   # T2 → right fist
+}
+# PhysioNet MI binary (left vs right, no rest)
+PHYSIONET_MI_BINARY_EVENT_TO_LABEL = {
+    2: 0,   # T1 → left
+    3: 1,   # T2 → right
+}
+
+# BCI Competition IV 2a raw .gdf: trigger codes 769-772
+BCI_IV_2A_EVENT_TO_LABEL = {
+    769: 0,  # left_hand
+    770: 1,  # right_hand
+    771: 2,  # feet
+    772: 3,  # tongue
+}
+
+# Auto-detect: events matching these ranges → dataset
+DATASET_EVENT_SIGNATURES = {
+    "physionet_mi": frozenset([1, 2, 3]),
+    "bci_iv_2a": frozenset([769, 770, 771, 772]),
+}
 T_MIN, T_MAX = -0.5, 2.5  # epoch window around cue (s)
 
 # --- Real-time ---
