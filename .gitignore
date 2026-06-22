@@ -47,6 +47,10 @@ logs/
 .DS_Store
 Thumbs.db
 
+# Claude Code (local only)
+CLAUDE.md
+.claude/
+
 # Environment
 .env
 .env.local
