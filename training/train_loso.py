@@ -19,6 +19,8 @@ Usage:
 Expected result: Within-subject MI binary typically 75-90% (vs 63% cross-subject).
 """
 import argparse
+import csv
+import json
 import sys
 from pathlib import Path
 
@@ -32,7 +34,14 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from models.eegnet_attn import create_model
-from utils.metrics import classification_report, per_class_accuracy
+from utils.metrics import (
+    classification_report,
+    per_class_accuracy,
+    per_class_recall,
+    per_class_specificity,
+    per_class_f1,
+)
+from datasets.label_mapping import class_names as get_class_names, get_semantic_labels
 
 
 def load_per_subject_data(data_dir: str, n_subjects: int) -> list[dict]:
@@ -98,7 +107,7 @@ def train_on_subjects(
 
 
 def evaluate_on_subject(model, subject: dict, device: str) -> dict:
-    """Evaluate model on a single subject. Returns metrics dict."""
+    """Evaluate model on a single subject. Returns metrics dict with per-class breakdown."""
     X_test = subject["X"]
     y_test = subject["y"]
     n_classes = len(np.unique(y_test))
@@ -119,7 +128,13 @@ def evaluate_on_subject(model, subject: dict, device: str) -> dict:
 
     y_pred = torch.cat(all_preds).numpy()
     y_true = torch.cat(all_labels).numpy()
-    return classification_report(y_true, y_pred)
+
+    metrics = classification_report(y_true, y_pred)
+    metrics["per_class_recall"] = per_class_recall(y_true, y_pred)
+    metrics["per_class_specificity"] = per_class_specificity(y_true, y_pred)
+    metrics["per_class_f1"] = per_class_f1(y_true, y_pred)
+    metrics["n_trials"] = len(y_true)
+    return metrics
 
 
 def finetune_on_subject(
@@ -208,6 +223,11 @@ def main():
                         help="Skip per-fold training (use pre-trained checkpoint)")
     parser.add_argument("--checkpoint", default=None,
                         help="Base checkpoint for --skip_train mode")
+    parser.add_argument("--output_dir", default="results",
+                        help="Directory for per-subject CSV and summary JSON")
+    parser.add_argument("--dataset", default="physionet_mi",
+                        choices=["physionet_mi", "bci_iv_2a", "deepbci"],
+                        help="Dataset name for semantic class labels in CSV header")
     args = parser.parse_args()
 
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
@@ -219,7 +239,7 @@ def main():
         print("Need at least 2 subjects for LOSO")
         return
 
-    all_accs, all_kappas = [], []
+    per_subject_results = []  # list of dicts for CSV export
 
     for i, test_subj in enumerate(subjects):
         test_id = test_subj["id"]
@@ -236,32 +256,72 @@ def main():
         )
 
         if args.finetune > 0:
-            # Few-shot fine-tune on target subject
             model, metrics = finetune_on_subject(
                 model, test_subj, n_finetune_trials=args.finetune,
                 device=device,
             )
             print(f"  FT+Test: acc={metrics['accuracy']:.4f}  kappa={metrics['kappa']:.4f}")
         else:
-            # Pure LOSO: evaluate directly
             metrics = evaluate_on_subject(model, test_subj, device)
             print(f"  Test:    acc={metrics['accuracy']:.4f}  kappa={metrics['kappa']:.4f}")
 
-        all_accs.append(metrics["accuracy"])
-        all_kappas.append(metrics["kappa"])
+        # Build per-subject row
+        row = {
+            "subject": f"S{test_id:02d}",
+            "accuracy": metrics["accuracy"],
+            "macro_f1": metrics["f1_macro"],
+            "kappa": metrics["kappa"],
+            "n_trials": metrics["n_trials"],
+        }
+        for cls_id, rec in metrics["per_class_recall"].items():
+            row[f"recall_{cls_id}"] = rec
+        for cls_id, spec in metrics["per_class_specificity"].items():
+            row[f"specificity_{cls_id}"] = spec
+        per_subject_results.append(row)
 
-        del model  # free GPU memory
+        del model
+
+    # ---- Export CSV ----
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = output_dir / f"loso_{args.model}.csv"
+
+    if per_subject_results:
+        fieldnames = list(per_subject_results[0].keys())
+        with open(csv_path, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(per_subject_results)
+
+    # ---- Export Summary JSON ----
+    accs = np.array([r["accuracy"] for r in per_subject_results])
+    kappas = np.array([r["kappa"] for r in per_subject_results])
+
+    summary = {
+        "model": args.model,
+        "dataset": args.dataset,
+        "n_subjects": len(subjects),
+        "finetune_trials": args.finetune,
+        "accuracy_mean": round(float(accs.mean()), 4),
+        "accuracy_std": round(float(accs.std()), 4),
+        "kappa_mean": round(float(kappas.mean()), 4),
+        "kappa_std": round(float(kappas.std()), 4),
+        "per_subject": per_subject_results,
+    }
+    json_path = output_dir / f"loso_{args.model}_summary.json"
+    with open(json_path, "w") as f:
+        json.dump(summary, f, indent=2)
 
     # ---- Final Summary ----
     print("\n" + "=" * 60)
     print("LOSO Summary")
     print("=" * 60)
-    accs = np.array(all_accs)
-    kappas = np.array(all_kappas)
     print(f"Accuracy:  mean={accs.mean():.4f}  std={accs.std():.4f}")
     print(f"Kappa:     mean={kappas.mean():.4f}  std={kappas.std():.4f}")
-    print(f"Per-subject: {[f'{a:.3f}' for a in all_accs]}")
+    print(f"Per-subject: {[f'{a:.3f}' for a in accs]}")
     print(f"Best/Worst: {accs.max():.4f} / {accs.min():.4f}")
+    print(f"\nCSV saved to {csv_path}")
+    print(f"JSON saved to {json_path}")
 
 
 if __name__ == "__main__":

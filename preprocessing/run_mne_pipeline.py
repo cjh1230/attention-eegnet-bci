@@ -20,10 +20,14 @@ sys.path.insert(0, str(ROOT))
 from utils.config import (
     SFREQ, FREQ_BANDS, T_MIN, T_MAX,
     MOTOR_CHANNELS, MOTOR_CHANNELS_16,
-    PHYSIONET_MI_EVENT_TO_LABEL,
-    PHYSIONET_MI_BINARY_EVENT_TO_LABEL,
-    BCI_IV_2A_EVENT_TO_LABEL,
+)
+
+from datasets.label_mapping import (
+    RAW_EVENT_TO_LABEL,
     DATASET_EVENT_SIGNATURES,
+    get_label_map,
+    list_datasets,
+    auto_detect_dataset,
 )
 
 
@@ -64,27 +68,20 @@ def extract_events(raw: mne.io.Raw, dataset: str = "auto") -> tuple[np.ndarray, 
     """
     Extract events and return (events_array, label_map).
 
-    label_map is a dict from raw event ID → canonical label (0=rest, 1=left, 2=right, 3=foot, 4=tongue).
-    Returns None for label_map when using auto-detection with unrecognized event IDs.
+    label_map is a dict from raw event ID → canonical label.
+    Returns None for label_map when dataset is unrecognized (caller should handle).
     """
-    # --- Try explicit annotation-based extraction first ---
-    if dataset == "physionet_mi":
-        event_id = {"T0": 1, "T1": 2, "T2": 3}
+    # --- Explicit dataset: try annotation-based extraction first ---
+    if dataset in RAW_EVENT_TO_LABEL:
+        event_id_map = RAW_EVENT_TO_LABEL[dataset]
+        event_id = {str(k): k for k in event_id_map.keys()}
         try:
             events, _ = mne.events_from_annotations(raw, event_id=event_id, verbose=False)
-            label_map = PHYSIONET_MI_EVENT_TO_LABEL
-            print(f"    Events (PhysioNet MI, annotation): {len(events)}")
+            label_map = event_id_map
+            print(f"    Events ({dataset}, annotation): {len(events)}")
             return events, label_map
         except (ValueError, RuntimeError):
-            pass
-    elif dataset == "bci_iv_2a":
-        event_id = {"769": 769, "770": 770, "771": 771, "772": 772}
-        try:
-            events, _ = mne.events_from_annotations(raw, event_id=event_id, verbose=False)
-            label_map = BCI_IV_2A_EVENT_TO_LABEL
-            print(f"    Events (BCI IV 2a, annotation): {len(events)}")
-            return events, label_map
-        except (ValueError, RuntimeError):
+            # Fall through to stim-channel extraction
             pass
 
     # --- Fallback: stim channel or generic annotation ---
@@ -95,15 +92,14 @@ def extract_events(raw: mne.io.Raw, dataset: str = "auto") -> tuple[np.ndarray, 
 
     # Auto-detect dataset from event IDs
     unique_ev = frozenset(np.unique(events[:, -1]))
-    if unique_ev.issubset(DATASET_EVENT_SIGNATURES["physionet_mi"]):
-        label_map = PHYSIONET_MI_EVENT_TO_LABEL
-        print(f"    Auto-detected: PhysioNet MI ({len(events)} events)")
-    elif unique_ev == DATASET_EVENT_SIGNATURES["bci_iv_2a"]:
-        label_map = BCI_IV_2A_EVENT_TO_LABEL
-        print(f"    Auto-detected: BCI IV 2a ({len(events)} events)")
+    detected = auto_detect_dataset(unique_ev)
+
+    if detected is not None:
+        label_map = RAW_EVENT_TO_LABEL[detected]
+        print(f"    Auto-detected: {detected} ({len(events)} events)")
     else:
-        label_map = None  # fallback: sorted remap
-        print(f"    Events (generic fallback): {len(events)} — mapping sorted IDs→0,1,2...")
+        label_map = None
+        print(f"    Events (unknown dataset): {len(events)} — unique IDs={sorted(unique_ev)}")
 
     return events, label_map
 
@@ -111,23 +107,21 @@ def extract_events(raw: mne.io.Raw, dataset: str = "auto") -> tuple[np.ndarray, 
 def apply_label_map(events: np.ndarray, label_map: dict[int, int] | None) -> np.ndarray:
     """
     Apply dataset-specific label mapping to events.
-    If label_map is None, falls back to sorted remapping (0,1,2...).
-    """
-    events_remapped = events.copy()
-    unique_ev = np.unique(events[:, -1])
 
-    if label_map is not None:
-        # Use explicit mapping; drop events not in the map
-        event_id_map = label_map
-        valid_mask = np.isin(events[:, -1], list(label_map.keys()))
-        events_remapped = events_remapped[valid_mask]
-        for old, new in event_id_map.items():
-            events_remapped[events_remapped[:, -1] == old, -1] = new
-    else:
-        # Generic fallback: sorted unique IDs → 0, 1, 2...
-        event_id_map = {v: i for i, v in enumerate(sorted(unique_ev))}
-        for old, new in event_id_map.items():
-            events_remapped[events[:, -1] == old, -1] = new
+    If label_map is None (unknown dataset), raises ValueError — sorted-remap
+    fallback is intentionally removed to prevent semantically-wrong labels.
+    """
+    if label_map is None:
+        raise ValueError(
+            "Cannot apply label map: unknown dataset. "
+            "Use --dataset to specify one of: " + ", ".join(list_datasets())
+        )
+
+    events_remapped = events.copy()
+    valid_mask = np.isin(events[:, -1], list(label_map.keys()))
+    events_remapped = events_remapped[valid_mask]
+    for old, new in label_map.items():
+        events_remapped[events_remapped[:, -1] == old, -1] = new
 
     return events_remapped
 

@@ -50,6 +50,9 @@ EVENT_IDS = {
 }
 
 # --- Dataset-specific event → label mappings ---
+# NOTE: Canonical mappings now live in datasets/label_mapping.py.
+# These constants are kept for backward compatibility with existing importers.
+# New code should use:  from datasets.label_mapping import RAW_EVENT_TO_LABEL
 # PhysioNet MI (eegbci): annotations 'T0'/'T1'/'T2' mapped to 1/2/3 by MNE
 PHYSIONET_MI_EVENT_TO_LABEL = {
     1: 0,   # T0 → rest

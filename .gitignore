@@ -40,6 +40,9 @@ C-/
 # Logs
 logs/
 
+# Generated results
+results/
+
 # Jupyter
 .ipynb_checkpoints/
 
