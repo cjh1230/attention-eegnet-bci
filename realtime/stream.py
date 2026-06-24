@@ -23,7 +23,7 @@ class DummyStream:
         self.s_freq = s_freq
         self.chunk_size = int(s_freq * 0.125)  # 125 ms chunks @ 250 Hz → ~31 samples
 
-    def open(self):
+    def open(self) -> None:
         pass
 
     def read_chunk(self) -> np.ndarray:
@@ -31,6 +31,6 @@ class DummyStream:
         time.sleep(0.125)  # simulate real-time pacing
         return np.random.randn(self.n_channels, self.chunk_size).astype(np.float32)
 
-    def close(self):
+    def close(self) -> None:
         pass
 

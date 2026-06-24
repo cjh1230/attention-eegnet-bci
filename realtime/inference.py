@@ -67,7 +67,10 @@ def build_action_map(
         full_names = [n for n, _ in sorted(semantic.items(), key=lambda kv: kv[1])]
         full_n = len(full_names)
 
-        if n_classes < full_n and full_names[0].lower() in ("rest", "idle"):
+        if full_n == 0:
+            # Unknown dataset — fall through to generic names
+            selected = []
+        elif n_classes < full_n and full_names[0].lower() in ("rest", "idle"):
             # Binary / reduced-class case: drop rest/idle, shift remaining down
             selected = full_names[1:n_classes + 1]
         elif n_classes <= full_n:
@@ -77,14 +80,22 @@ def build_action_map(
             # Pad with generic names for extra classes
             selected += [f"CLS_{i}" for i in range(full_n, n_classes)]
 
+        # If no names from dataset, fall back to generic
+        if not selected:
+            selected = [f"CLS_{i}" for i in range(n_classes)]
+            if idle_label < n_classes:
+                selected[idle_label] = "REST"  # will map to STOP below
+
         action_map = {}
         for i, name in enumerate(selected):
             upper = name.upper()
             if upper in ("REST", "IDLE"):
                 action_map[i] = "STOP"
+            elif upper.startswith("CLS_"):
+                action_map[i] = upper  # keep CLS_N as-is
             else:
                 # Shorten: LEFT_HAND→LEFT, RIGHT_HAND→RIGHT
-                action_map[i] = upper.replace("_HAND", "").replace("_", " ")
+                action_map[i] = upper.replace("_HAND", "")
     except (ValueError, ImportError):
         action_map = {i: f"CLS_{i}" for i in range(n_classes)}
         if idle_label < n_classes:

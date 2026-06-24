@@ -110,6 +110,14 @@ class DeepBCIRecorder:
         self._protocol = protocol
         self._operator = operator
 
+        # Close any previous session's file handles before reopening
+        if self._raw_writer is not None:
+            self._raw_writer.close()
+            self._raw_writer = None
+        if self._events_writer is not None:
+            self._events_writer.close()
+            self._events_writer = None
+
         session_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         self._session_id = f"sub_{subject_id:03d}/session_{session_ts}"
         self._session_dir = (

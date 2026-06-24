@@ -41,7 +41,7 @@ from utils.metrics import (
     per_class_specificity,
     per_class_f1,
 )
-from datasets.label_mapping import class_names as get_class_names, get_semantic_labels
+from datasets.label_mapping import class_names as get_class_names
 
 
 def load_per_subject_data(data_dir: str, n_subjects: int) -> list[dict]:
@@ -110,7 +110,6 @@ def evaluate_on_subject(model, subject: dict, device: str) -> dict:
     """Evaluate model on a single subject. Returns metrics dict with per-class breakdown."""
     X_test = subject["X"]
     y_test = subject["y"]
-    n_classes = len(np.unique(y_test))
 
     test_ds = TensorDataset(
         torch.from_numpy(X_test).float(),

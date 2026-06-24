@@ -241,17 +241,15 @@ def cmd_demo():
         model.load_state_dict(checkpoint["state_dict"])
         print(f"  Loaded {model_type} (n_classes={n_classes}) from {args.checkpoint}")
     else:
-        model = create_model("eegnet", n_channels=N_CHANNELS, n_classes=3)
+        n_classes = 3
+        model = create_model("eegnet", n_channels=N_CHANNELS, n_classes=n_classes)
     model.eval()
 
     # ── Inference pipeline ───────────────────────────────────────
     buffer = RingBuffer()
     inference = MIInference(model, buffer, device="cpu", n_classes=n_classes)
     stream.open()
-    if args.source == "replay":
-        print("Running inference loop (Ctrl+C to stop)...\n")
-    else:
-        print("Running inference loop (Ctrl+C to stop)...\n")
+    print("Running inference loop (Ctrl+C to stop)...\n")
 
     try:
         step = 0
