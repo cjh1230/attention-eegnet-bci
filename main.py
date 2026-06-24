@@ -12,7 +12,9 @@ Usage:
     python main.py dashboard       # Streamlit dashboard
     python main.py metadata        # Export dataset metadata to JSON
     python main.py subjectwise     # Subject-wise eval from checkpoint
-    python main.py record          # DeepBCI data collection (interactive)
+    python main.py record_dummy    # Record with synthetic data (offline test)
+    python main.py record_lsl      # Record from LSL stream (real hardware)
+    python main.py record_deepbci  # Record from DeepBCI SDK (placeholder)
     python main.py run_all         # One-command: preprocess → train → LOSO → export
     python main.py export          # Generate competition Excel report
     python main.py figures         # Generate report figures (PNG)
@@ -73,7 +75,7 @@ def cmd_demo():
         description="Real-time BCI demo (simulated or file-replay stream)"
     )
     parser.add_argument(
-        "--source", choices=["dummy", "replay"], default="dummy",
+        "--source", choices=["dummy", "replay", "lsl"], default="dummy",
         help="Stream source type (default: dummy)",
     )
     parser.add_argument(
@@ -207,6 +209,10 @@ def cmd_demo():
             trial_mode=True,          # return full trials, bypass ring buffer
         )
         print(f"File replay (trial mode): {args.data}")
+    elif args.source == "lsl":
+        from realtime.deepbci_stream import DeepBCIStream
+        stream = DeepBCIStream(mode="lsl", stream_name="DeepBCI")
+        print("LSL stream: DeepBCI")
     else:
         from realtime.stream import DummyStream
         stream = DummyStream()
@@ -335,31 +341,81 @@ def cmd_subjectwise():
     run_py("training/evaluate_subjectwise.py", *sys.argv[2:])
 
 
-def cmd_deepbci_record():
-    """Launch DeepBCI recorder (interactive data collection)."""
-    print("DeepBCI Recorder — interactive data collection")
-    print("─" * 50)
-    from realtime.deepbci_recorder import DeepBCIRecorder
+def _record_loop(stream, recorder, subject_id, notes):
+    """Shared recording loop: drive *stream* → *recorder* until Ctrl+C.
 
-    subject_id = int(input("Subject ID: ") or "1")
-    notes = input("Notes (optional): ") or ""
+    Parameters
+    ----------
+    stream : EEGSource-compatible
+        Any object implementing open() / read_chunk() / close().
+    recorder : DeepBCIRecorder
+    subject_id : int
+    notes : str
+    """
+    import time
 
-    recorder = DeepBCIRecorder()
     session_dir = recorder.start_session(subject_id, notes=notes)
     print(f"\nSession directory: {session_dir}")
     print("Recording... (press Ctrl+C to stop)")
     try:
-        import time
+        stream.open()
         t0 = time.time()
         while True:
-            chunk = np.random.randn(8, 31).astype(np.float32)  # dummy chunk
-            t = time.time() - t0
-            recorder.record_chunk(chunk, t)
-            time.sleep(0.125)
+            chunk = stream.read_chunk()
+            recorder.record_chunk(chunk, time.time() - t0)
     except KeyboardInterrupt:
         print("\nStopping...")
     finally:
+        stream.close()
         recorder.end_session()
+
+
+def cmd_record_dummy():
+    """Record with synthetic random data (offline testing)."""
+    from realtime.stream import DummyStream
+    from realtime.deepbci_recorder import DeepBCIRecorder
+
+    subject_id = int(input("Subject ID: ") or "1")
+    notes = input("Notes (optional): ") or ""
+    _record_loop(DummyStream(), DeepBCIRecorder(), subject_id, notes)
+
+
+def cmd_record_lsl():
+    """Record from live LSL stream (requires pylsl + DeepBCI hardware)."""
+    from realtime.deepbci_stream import DeepBCIStream
+    from realtime.deepbci_recorder import DeepBCIRecorder
+
+    subject_id = int(input("Subject ID: ") or "1")
+    notes = input("Notes (optional): ") or ""
+    try:
+        _record_loop(
+            DeepBCIStream(mode="lsl", stream_name="DeepBCI"),
+            DeepBCIRecorder(),
+            subject_id,
+            notes,
+        )
+    except (ImportError, RuntimeError) as e:
+        print(f"ERROR: {e}")
+        sys.exit(1)
+
+
+def cmd_record_deepbci():
+    """Record from DeepBCI native SDK (placeholder — not yet implemented)."""
+    from realtime.deepbci_source import DeepBCISource
+    from realtime.deepbci_recorder import DeepBCIRecorder
+
+    subject_id = int(input("Subject ID: ") or "1")
+    notes = input("Notes (optional): ") or ""
+    try:
+        _record_loop(
+            DeepBCISource(),
+            DeepBCIRecorder(),
+            subject_id,
+            notes,
+        )
+    except NotImplementedError as e:
+        print(f"ERROR: {e}")
+        sys.exit(1)
 
 
 def cmd_run_all():
@@ -388,7 +444,9 @@ COMMANDS = {
     "dashboard": cmd_dashboard,
     "metadata": cmd_metadata,
     "subjectwise": cmd_subjectwise,
-    "record": cmd_deepbci_record,
+    "record_dummy": cmd_record_dummy,
+    "record_lsl": cmd_record_lsl,
+    "record_deepbci": cmd_record_deepbci,
     "run_all": cmd_run_all,
     "export": cmd_export,
     "figures": cmd_figures,
