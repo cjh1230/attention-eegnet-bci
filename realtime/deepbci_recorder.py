@@ -3,18 +3,20 @@ DeepBCI data recorder — saves streaming EEG to disk during data collection.
 
 Output per subject:
     data/subjects/sub_XXX/
-    ├── raw.csv          # continuous EEG (n_channels × n_samples)
-    ├── events.csv       # trial markers (timestamp, event_label, class_id)
-    ├── metadata.json    # {subject_id, date, n_channels, sfreq, notes, n_trials}
-    └── notes.md         # free-text experiment notes
+    └── session_YYYYMMDD_HHMMSS/
+        ├── raw.csv          # continuous EEG (n_channels × n_samples)
+        ├── events.csv       # trial markers (timestamp, event_label, class_id)
+        ├── metadata.json    # {session_id, subject_id, date, device, protocol,
+        │                    #   operator, channels, n_channels, sfreq, n_trials, notes}
+        └── notes.md         # free-text experiment notes
 
 Usage:
     from realtime.deepbci_recorder import DeepBCIRecorder
 
     recorder = DeepBCIRecorder(data_root="data/subjects")
     recorder.start_session(subject_id=1, notes="First pilot run — resting state")
-    recorder.record_trial(chunk, timestamp=0.0, event_label="rest")
-    recorder.record_trial(chunk, timestamp=2.0, event_label="left_hand_cue")
+    recorder.record_chunk(chunk, timestamp=0.0, event_label="rest")
+    recorder.record_chunk(chunk, timestamp=2.0, event_label="left_hand_cue")
     recorder.end_session()
 """
 
@@ -25,7 +27,7 @@ from pathlib import Path
 
 import numpy as np
 
-from utils.config import N_CHANNELS, SFREQ
+from utils.config import MOTOR_CHANNELS, N_CHANNELS, SFREQ
 from datasets.label_mapping import LABEL_MAPS
 
 
@@ -52,6 +54,7 @@ class DeepBCIRecorder:
         self.s_freq = s_freq
 
         self._session_dir: Path | None = None
+        self._session_id: str = ""
         self._raw_file: Path | None = None
         self._events_file: Path | None = None
         self._raw_writer = None
@@ -60,6 +63,9 @@ class DeepBCIRecorder:
         self._notes: str = ""
         self._trial_count: int = 0
         self._session_start: str = ""
+        self._device: str = "DeepBCI"
+        self._protocol: str = "motor_imagery"
+        self._operator: str = ""
 
     # ── Public API ─────────────────────────────────────────────────
 
@@ -68,11 +74,14 @@ class DeepBCIRecorder:
         subject_id: int,
         notes: str = "",
         dataset: str = "deepbci",
+        device: str = "DeepBCI",
+        protocol: str = "motor_imagery",
+        operator: str = "",
     ) -> Path:
         """
         Begin a recording session for *subject_id*.
 
-        Creates data/subjects/sub_XXX/ with metadata.
+        Creates data/subjects/sub_XXX/session_YYYYMMDD_HHMMSS/ with metadata.
 
         Parameters
         ----------
@@ -82,6 +91,12 @@ class DeepBCIRecorder:
             Free-text notes saved to notes.md.
         dataset : str
             Dataset key for label mapping (default "deepbci").
+        device : str
+            Hardware device name (default "DeepBCI").
+        protocol : str
+            Experiment protocol name (default "motor_imagery").
+        operator : str
+            Name of the experiment operator.
 
         Returns
         -------
@@ -91,15 +106,24 @@ class DeepBCIRecorder:
         self._notes = notes
         self._trial_count = 0
         self._session_start = datetime.now().isoformat()
+        self._device = device
+        self._protocol = protocol
+        self._operator = operator
 
-        self._session_dir = self.data_root / f"sub_{subject_id:03d}"
+        session_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self._session_id = f"sub_{subject_id:03d}/session_{session_ts}"
+        self._session_dir = (
+            self.data_root / f"sub_{subject_id:03d}" / f"session_{session_ts}"
+        )
         self._session_dir.mkdir(parents=True, exist_ok=True)
 
         # Notes
         notes_path = self._session_dir / "notes.md"
         notes_path.write_text(
-            f"# Subject {subject_id:03d}\n\n"
-            f"Date: {self._session_start}\n\n"
+            f"# Subject {subject_id:03d} — Session {session_ts}\n\n"
+            f"Date: {self._session_start}\n"
+            f"Device: {device}\n"
+            f"Protocol: {protocol}\n\n"
             f"{notes}\n",
             encoding="utf-8",
         )
@@ -163,8 +187,13 @@ class DeepBCIRecorder:
             return
 
         metadata = {
+            "session_id": self._session_id,
             "subject_id": self._subject_id,
             "date": self._session_start,
+            "device": self._device,
+            "protocol": self._protocol,
+            "operator": self._operator,
+            "channels": [str(ch) for ch in MOTOR_CHANNELS],
             "n_channels": self.n_channels,
             "sfreq": self.s_freq,
             "n_trials": self._trial_count,

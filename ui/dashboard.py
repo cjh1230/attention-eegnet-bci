@@ -101,9 +101,12 @@ def main():
     defaults = {
         "buffer": None,
         "model": None,
+        "n_classes": 3,
         "history": np.zeros((N_CHANNELS, 100)),
-        "session_log": [],  # [(timestamp, class_id, confidence, label)]
+        "session_log": [],
         "confusion_counts": np.zeros((3, 3), dtype=int),
+        "replay_source": None,
+        "replay_trial_idx": 0,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -116,6 +119,20 @@ def main():
     checkpoints = _get_available_checkpoints()
     checkpoint_options = ["(untrained)"] + checkpoints
     selected_ckpt = st.sidebar.selectbox("Model Checkpoint", checkpoint_options)
+
+    # Data source
+    st.sidebar.subheader("Data Source")
+    data_source = st.sidebar.radio(
+        "Source Type",
+        ["Synthetic (random)", "File Replay"],
+        index=0,
+    )
+    replay_path = ""
+    if data_source == "File Replay":
+        replay_path = st.sidebar.text_input(
+            "Path to X.npy",
+            value="data/loso_binary/subj_01/X.npy",
+        )
 
     startup = st.sidebar.button("Load Model & Start", type="primary")
     stop = st.sidebar.button("Stop")
@@ -146,13 +163,58 @@ def main():
         st.info("Stopped. Click 'Load Model & Start' to begin.")
 
     if startup:
-        ckpt = selected_ckpt if selected_ckpt != "(untrained)" else None
-        st.session_state["model"] = _load_model(ckpt)
+        ckpt_name = selected_ckpt if selected_ckpt != "(untrained)" else None
+        model = _load_model(ckpt_name)
+
+        # Determine n_classes from model
+        import torch
+        if hasattr(model, "n_classes"):
+            n_classes = model.n_classes
+        elif hasattr(model, "classifier") and model.classifier is not None:
+            n_classes = model.classifier[-1].out_features
+        else:
+            n_classes = 3
+
+        # Build dynamic action map
+        from realtime.inference import build_action_map
+        action_map = build_action_map(n_classes, "physionet_mi")
+        labels = dict(action_map)
+        colors = {}
+        for i, name in labels.items():
+            if name == "STOP":
+                colors[i] = "gray"
+            elif "LEFT" in name:
+                colors[i] = "blue"
+            elif "RIGHT" in name:
+                colors[i] = "red"
+            else:
+                colors[i] = "green"
+
+        st.session_state["model"] = model
+        st.session_state["n_classes"] = n_classes
+        st.session_state["labels"] = labels
+        st.session_state["colors"] = colors
+        st.session_state["action_map"] = action_map
+
         from realtime.buffer import RingBuffer
         st.session_state["buffer"] = RingBuffer()
         st.session_state["session_log"] = []
-        st.session_state["confusion_counts"] = np.zeros((3, 3), dtype=int)
-        st.success(f"Model loaded{' (' + ckpt + ')' if ckpt else ' (untrained)'}. Ready.")
+        st.session_state["confusion_counts"] = np.zeros(
+            (n_classes, n_classes), dtype=int
+        )
+
+        # Initialize replay source if selected
+        if data_source == "File Replay" and replay_path:
+            from realtime.file_replay import FileReplaySource
+            source = FileReplaySource(data_path=replay_path, trial_mode=True)
+            source.open()
+            st.session_state["replay_source"] = source
+            st.session_state["replay_trial_idx"] = 0
+        else:
+            st.session_state["replay_source"] = None
+
+        ckpt_label = f" ({ckpt_name})" if ckpt_name else " (untrained)"
+        st.success(f"Model loaded{ckpt_label} — {n_classes} classes. Ready.")
 
     # --- Main layout ---
     col1, col2 = st.columns([3, 2])
@@ -163,77 +225,155 @@ def main():
         model = st.session_state["model"]
         buffer = st.session_state["buffer"]
         history = st.session_state["history"]
+        replay_src = st.session_state.get("replay_source")
 
-        labels = {0: "IDLE", 1: "LEFT", 2: "RIGHT"}
-        colors = {0: "gray", 1: "blue", 2: "red"}
+        labels = st.session_state.get("labels", {0: "STOP", 1: "LEFT", 2: "RIGHT"})
+        colors = st.session_state.get("colors", {0: "gray", 1: "blue", 2: "red"})
+        n_classes = st.session_state.get("n_classes", 3)
 
-        # Synthetic data chunk (replace with real LSL stream when available)
-        chunk = np.random.randn(N_CHANNELS, int(250 * 0.125)) * 5.0
-        buffer.push(chunk)
-        data = buffer.read()
-
-        # Rolling display update
-        history = np.roll(history, -1, axis=-1)
-        history[:, -1] = data[:, 0]
-        st.session_state["history"] = history
-
-        # ---- Column 1: Waveform + Confusion Matrix ----
-        with col1:
-            st.subheader("EEG Waveform (live)")
-            st.line_chart(history.T, height=250)
-
-            st.subheader("Confusion Matrix (cumulative)")
-            cm = st.session_state["confusion_counts"]
-            if cm.sum() > 0:
-                import pandas as pd
-                cm_df = pd.DataFrame(
-                    cm,
-                    index=[f"True {labels[i]}" for i in range(3)],
-                    columns=[f"Pred {labels[i]}" for i in range(3)],
-                )
-                st.dataframe(cm_df, use_container_width=True)
-
-        # ---- Column 2: Prediction + Confidence ----
-        with col2:
-            # Inference
-            tensor = torch.from_numpy(data).unsqueeze(0).float()
-            with torch.no_grad():
-                probs = torch.softmax(model(tensor), dim=-1).squeeze().numpy()
-
-            class_id = int(np.argmax(probs))
-            conf = float(probs[class_id])
-
-            # Update session log
-            st.session_state["session_log"].append((
-                time.strftime("%H:%M:%S"), class_id, round(conf, 4),
-                labels[class_id],
-            ))
-
-            # Highlight if above threshold
-            above_threshold = conf >= threshold
-            emoji = {0: "🟡", 1: "👈", 2: "👉"}
-            st.subheader("Prediction")
-            st.markdown(
-                f"## {emoji.get(class_id, '❓')} {labels.get(class_id, '?')}"
-            )
-            if above_threshold:
-                st.success(f"Confidence: {conf:.2%} ✅")
+        # --- Data acquisition ---
+        true_label = None
+        if replay_src is not None:
+            # File replay: feed full trials directly
+            chunk = replay_src.read_chunk()
+            if replay_src.exhausted:
+                st.warning("Replay exhausted. Toggle Streaming off/on to restart.")
+                chunk = np.random.randn(N_CHANNELS, int(250 * 0.125)) * 5.0
             else:
-                st.warning(f"Confidence: {conf:.2%} ⚠️ (below threshold)")
+                true_label = replay_src.current_label
+                # Bypass ring buffer: feed full trial to model
+                tensor = torch.from_numpy(chunk).unsqueeze(0).float()
+                with torch.no_grad():
+                    probs = torch.softmax(model(tensor), dim=-1).squeeze().numpy()
+                class_id = int(np.argmax(probs))
+                conf = float(probs[class_id])
 
-            st.subheader("Class Probabilities")
-            prob_data = {labels[i]: float(probs[i]) for i in range(len(labels))}
-            st.bar_chart(prob_data)
+                # Update session log
+                st.session_state["session_log"].append((
+                    time.strftime("%H:%M:%S"), class_id, round(conf, 4),
+                    labels.get(class_id, "?"),
+                ))
 
-            st.subheader("Recent Log")
-            log = st.session_state["session_log"]
-            for entry in log[-10:]:
-                ts, cid, cf, lbl = entry
-                st.text(f"[{ts}] {lbl:5s} | conf={cf:.3f}")
+                # Update confusion matrix with true label if available
+                if true_label is not None and true_label >= 0:
+                    cm = st.session_state["confusion_counts"]
+                    if true_label < n_classes and class_id < n_classes:
+                        cm[true_label, class_id] += 1
 
-        # Re-run after a short delay
-        time.sleep(0.125)
-        st.rerun()
+                # Waveform: show the full trial (first channel, subsampled)
+                history = np.roll(history, -1, axis=-1)
+                history[:, -1] = chunk[:, 0]  # first channel, first sample
+                st.session_state["history"] = history
+
+                # Show results
+                with col1:
+                    st.subheader("EEG Waveform (replay)")
+                    st.line_chart(history.T, height=250)
+
+                    st.subheader("Confusion Matrix (cumulative)")
+                    cm = st.session_state["confusion_counts"]
+                    if cm.sum() > 0:
+                        import pandas as pd
+                        cm_df = pd.DataFrame(
+                            cm,
+                            index=[f"True {labels[i]}" for i in range(n_classes)],
+                            columns=[f"Pred {labels[i]}" for i in range(n_classes)],
+                        )
+                        st.dataframe(cm_df, use_container_width=True)
+
+                with col2:
+                    above_threshold = conf >= threshold
+                    emoji_map = {0: "🟡", 1: "👈", 2: "👉", 3: "🦶", 4: "👅"}
+                    st.subheader("Prediction")
+                    st.markdown(
+                        f"## {emoji_map.get(class_id, '❓')} {labels.get(class_id, '?')}"
+                    )
+                    if true_label is not None and true_label >= 0:
+                        true_name = labels.get(true_label, f"CLS_{true_label}")
+                        st.caption(f"True label: {true_name}")
+                    if above_threshold:
+                        st.success(f"Confidence: {conf:.2%} ✅")
+                    else:
+                        st.warning(f"Confidence: {conf:.2%} ⚠️ (below threshold)")
+
+                    st.subheader("Class Probabilities")
+                    prob_data = {labels.get(i, f"CLS_{i}"): float(probs[i])
+                                 for i in range(len(probs))}
+                    st.bar_chart(prob_data)
+
+                    st.subheader("Recent Log")
+                    log = st.session_state["session_log"]
+                    for entry in log[-10:]:
+                        ts, cid, cf, lbl = entry
+                        st.text(f"[{ts}] {lbl:5s} | conf={cf:.3f}")
+
+                time.sleep(0.125)
+                st.rerun()
+
+        else:
+            # Synthetic data: ring buffer → inference
+            chunk = np.random.randn(N_CHANNELS, int(250 * 0.125)) * 5.0
+            buffer.push(chunk)
+            data = buffer.read()
+
+            history = np.roll(history, -1, axis=-1)
+            history[:, -1] = data[:, 0]
+            st.session_state["history"] = history
+
+            # ---- Column 1: Waveform + Confusion Matrix ----
+            with col1:
+                st.subheader("EEG Waveform (live)")
+                st.line_chart(history.T, height=250)
+
+                st.subheader("Confusion Matrix (cumulative)")
+                cm = st.session_state["confusion_counts"]
+                if cm.sum() > 0:
+                    import pandas as pd
+                    cm_df = pd.DataFrame(
+                        cm,
+                        index=[f"True {labels[i]}" for i in range(n_classes)],
+                        columns=[f"Pred {labels[i]}" for i in range(n_classes)],
+                    )
+                    st.dataframe(cm_df, use_container_width=True)
+
+            # ---- Column 2: Prediction + Confidence ----
+            with col2:
+                tensor = torch.from_numpy(data).unsqueeze(0).float()
+                with torch.no_grad():
+                    probs = torch.softmax(model(tensor), dim=-1).squeeze().numpy()
+
+                class_id = int(np.argmax(probs))
+                conf = float(probs[class_id])
+
+                st.session_state["session_log"].append((
+                    time.strftime("%H:%M:%S"), class_id, round(conf, 4),
+                    labels.get(class_id, "?"),
+                ))
+
+                above_threshold = conf >= threshold
+                emoji_map = {0: "🟡", 1: "👈", 2: "👉", 3: "🦶", 4: "👅"}
+                st.subheader("Prediction")
+                st.markdown(
+                    f"## {emoji_map.get(class_id, '❓')} {labels.get(class_id, '?')}"
+                )
+                if above_threshold:
+                    st.success(f"Confidence: {conf:.2%} ✅")
+                else:
+                    st.warning(f"Confidence: {conf:.2%} ⚠️ (below threshold)")
+
+                st.subheader("Class Probabilities")
+                prob_data = {labels.get(i, f"CLS_{i}"): float(probs[i])
+                             for i in range(len(probs))}
+                st.bar_chart(prob_data)
+
+                st.subheader("Recent Log")
+                log = st.session_state["session_log"]
+                for entry in log[-10:]:
+                    ts, cid, cf, lbl = entry
+                    st.text(f"[{ts}] {lbl:5s} | conf={cf:.3f}")
+
+            time.sleep(0.125)
+            st.rerun()
 
     elif not running:
         # Show model info when idle

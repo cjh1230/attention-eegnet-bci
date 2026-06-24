@@ -22,6 +22,7 @@ data/raw/*
 data/processed/*
 data/processed_*/
 data/loso_*/
+data/bci_iv_2a_processed/
 data/subjects/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep

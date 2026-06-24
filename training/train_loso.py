@@ -204,7 +204,12 @@ def finetune_on_subject(
     y_pred = torch.cat(all_preds).numpy()
     y_true = torch.cat(all_labels).numpy()
 
-    return model, classification_report(y_true, y_pred)
+    metrics = classification_report(y_true, y_pred)
+    metrics["per_class_recall"] = per_class_recall(y_true, y_pred)
+    metrics["per_class_specificity"] = per_class_specificity(y_true, y_pred)
+    metrics["per_class_f1"] = per_class_f1(y_true, y_pred)
+    metrics["n_trials"] = len(y_true)
+    return model, metrics
 
 
 def main():
@@ -238,6 +243,18 @@ def main():
     if len(subjects) < 2:
         print("Need at least 2 subjects for LOSO")
         return
+
+    # ── Label validation ──────────────────────────────────────────
+    from datasets.label_mapping import validate_labels, class_names as get_class_names
+    semantic_names = get_class_names(args.dataset)
+    total_classes = len(semantic_names)
+    for subj in subjects:
+        if not validate_labels(subj["y"], args.dataset):
+            print(
+                f"WARNING: Subject {subj['id']} has labels outside expected "
+                f"range 0–{total_classes-1} for dataset '{args.dataset}'. "
+                f"Got unique labels: {np.unique(subj['y'])}."
+            )
 
     per_subject_results = []  # list of dicts for CSV export
 
@@ -274,9 +291,17 @@ def main():
             "n_trials": metrics["n_trials"],
         }
         for cls_id, rec in metrics["per_class_recall"].items():
-            row[f"recall_{cls_id}"] = rec
+            cls_name = (
+                semantic_names[cls_id] if cls_id < len(semantic_names)
+                else f"cls_{cls_id}"
+            )
+            row[f"recall_{cls_name}"] = rec
         for cls_id, spec in metrics["per_class_specificity"].items():
-            row[f"specificity_{cls_id}"] = spec
+            cls_name = (
+                semantic_names[cls_id] if cls_id < len(semantic_names)
+                else f"cls_{cls_id}"
+            )
+            row[f"specificity_{cls_name}"] = spec
         per_subject_results.append(row)
 
         del model
@@ -284,7 +309,9 @@ def main():
     # ---- Export CSV ----
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    csv_path = output_dir / f"loso_{args.model}.csv"
+    ds_tag = f"_{args.dataset}" if args.dataset != "physionet_mi" else ""
+    ft_tag = f"_ft{args.finetune}" if args.finetune > 0 else ""
+    csv_path = output_dir / f"loso_{args.model}{ds_tag}{ft_tag}.csv"
 
     if per_subject_results:
         fieldnames = list(per_subject_results[0].keys())
@@ -308,7 +335,7 @@ def main():
         "kappa_std": round(float(kappas.std()), 4),
         "per_subject": per_subject_results,
     }
-    json_path = output_dir / f"loso_{args.model}_summary.json"
+    json_path = output_dir / f"loso_{args.model}{ds_tag}{ft_tag}_summary.json"
     with open(json_path, "w") as f:
         json.dump(summary, f, indent=2)
 
