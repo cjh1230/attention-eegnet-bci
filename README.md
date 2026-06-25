@@ -2,7 +2,7 @@
 
 > **XH-202610** · 挑战杯 2026 · `master` [![tests](https://img.shields.io/badge/tests-304%20passed-brightgreen)]()
 
-基于运动想象（Motor Imagery）的脑-机接口算法研究与实时系统。使用 MNE-Python 预处理、EEGNet + 时空注意力 + Riemannian Geometry 多方法对比，实现高精度跨被试 MI 识别。
+基于运动想象（Motor Imagery）的脑-机接口算法研究与实时系统。使用 MNE-Python 预处理，结合 EEGNet、时空注意力与 Riemannian Geometry 方法，构建 8 通道跨被试 MI 识别、多方法对比评估与在线闭环原型系统。
 
 **关键词**：运动想象 · EEGNet · 时空注意力 · Riemannian Geometry · EEG Conformer · FBCNet · 域泛化 · LOSO 交叉验证 · 在线闭环 · 空闲门控
 
@@ -57,7 +57,7 @@ python main.py demo --source replay --data data/loso_binary/subj_01/X.npy \
 | Tangent Space + LDA + EA | Riemannian | 38.60% ± 12.44% | 0.181 |
 | **EEGNet (base)** | **DL** | **39.47%** ± 12.45% | **0.193** |
 
-> **关键发现**: Binary 任务 Riemannian 碾压 DL (+8pp)，4-class 任务 EEGNet 反超 Riemannian。设置上限并非 55%，而是 **~60%**。DL 模型在简单任务上仍有 ~8pp 提升空间，在复杂任务上已具非线性优势。
+> **关键发现**: Binary 任务 Tangent Space + LDA 达 60.30%（vs EEGNet base +8.37pp，vs 最优 DL 模型 +5.26pp）；MDM 56.30% 最弱；FgMDM ≈ Tangent（频带分解在 8ch 设置下无增益）。4-class 任务 EEGNet 39.47% 略优于 Tangent 38.60%。设置上限并非 55%，而是 **~60%**。
 
 > Chance level: PhysioNet 50% (binary), BCI IV 2a 25% (4-class).  Random-split 结果（仅用于 pipeline 验证）：CSP+SVM 38.6%, EEGNet 53.8% (3-class).
 
@@ -231,6 +231,8 @@ black . && ruff check .              # 格式化 + Lint
   → 导出 X=[N, 8, 750] float32, y=[N] int64
 ```
 
+> **注意**: 预处理阶段使用 8–30 Hz 带通。FBCSP/FBCNet/FgMDM 默认的 4–40 Hz 9 频带中，4–8 Hz、32–36 Hz、36–40 Hz 落在通带外。实验表明频带分解在此 8ch 设置下无显著增益（FgMDM ≈ Tangent Space），因此**不推荐**将 FBCSP_BANDS 作为默认滤波器组 — 使用全频段协方差（Tangent Space）或仅限 8–30 Hz 内子带。
+
 ---
 
 ## 模型
@@ -277,7 +279,7 @@ Input (B, 1, C, T)
 | **MDM** | 流形上的最小黎曼距离分类 | Congedo et al. (BCI, 2017) |
 | **FgMDM** | 多频带滤波 + 每带切空间 + LDA | 类似 Ang et al. (2008) 的频带分解思路 |
 
-Riemannian 方法是 MI-BCI 领域公认的最强传统基线——在 binary LOSO 上以 **8pp 优势碾压所有 DL 模型**。使用 `pyriemann` 库实现，提供与 `csp.py` 一致的 sklearn Pipeline API。
+Riemannian 方法是 MI-BCI 领域公认的最强传统基线。在当前 8ch binary LOSO 设置下，Tangent Space + LDA + EA 达 60.30%，相比 EEGNet base 提升 8.37pp，相比最优深度模型（EEGNet + SpatiotemporalAttn）提升 5.26pp。使用 `pyriemann` 库实现，提供与 `csp.py` 一致的 sklearn Pipeline API。
 
 ### 域泛化与自适应
 

@@ -4,7 +4,6 @@ End-to-end MNE preprocessing — multi-subject support, aggregates across subjec
 Usage:
     python preprocessing/run_mne_pipeline.py
     python preprocessing/run_mne_pipeline.py --input data/raw/physionet_mi --output data/processed/
-    python preprocessing/run_mne_pipeline.py --ica   # with ICA artifact removal
 """
 import argparse
 import sys
@@ -180,7 +179,6 @@ def main():
     parser = argparse.ArgumentParser(description="MNE preprocessing pipeline")
     parser.add_argument("--input", default="data/raw/physionet_mi", help="Input directory")
     parser.add_argument("--output", default="data/processed", help="Output directory")
-    parser.add_argument("--ica", action="store_true", help="Apply ICA artifact removal")
     parser.add_argument("--max-channels", type=int, default=64, help="Cap channels to first N")
     parser.add_argument("--channels", default="motor8", choices=["motor8", "motor16", "all"],
                         help="Channel preset: motor8 (8ch), motor16 (16ch), or all")
