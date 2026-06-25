@@ -17,6 +17,7 @@ Usage:
     python main.py record_deepbci  # Record from DeepBCI SDK (placeholder)
     python main.py run_all         # One-command: preprocess → train → LOSO → export
     python main.py export          # Generate competition Excel report
+    python main.py riemann         # Riemannian geometry LOSO baseline
     python main.py figures         # Generate report figures (PNG)
 
 Quick start (first time):
@@ -106,7 +107,7 @@ def cmd_demo():
 
     import torch
     from realtime.buffer import RingBuffer
-    from realtime.inference import MIInference, build_action_map
+    from realtime.inference import MIInference
     from models.eegnet_attn import create_model
     from utils.config import N_CHANNELS
 
@@ -150,9 +151,6 @@ def cmd_demo():
             model = create_model("eegnet", n_channels=N_CHANNELS, n_classes=3)
             n_classes = 3
         model.eval()
-
-        # Build action map
-        action_map = build_action_map(n_classes, "physionet_mi")
 
         print(f"Multi-subject demo: {len(subj_paths)} subjects")
         print(f"Model: {args.checkpoint or '(untrained)'}, {n_classes} classes\n")
@@ -428,6 +426,11 @@ def cmd_export():
     run_py("scripts/export_competition_excel.py", *sys.argv[2:])
 
 
+def cmd_riemann():
+    """Riemannian geometry LOSO baseline."""
+    run_py("training/train_riemann_loso.py", *sys.argv[2:])
+
+
 def cmd_figures():
     """Generate report figures from results/."""
     run_py("scripts/make_report_figures.py", *sys.argv[2:])
@@ -448,6 +451,7 @@ COMMANDS = {
     "record_lsl": cmd_record_lsl,
     "record_deepbci": cmd_record_deepbci,
     "run_all": cmd_run_all,
+    "riemann": cmd_riemann,
     "export": cmd_export,
     "figures": cmd_figures,
 }

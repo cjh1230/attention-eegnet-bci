@@ -23,3 +23,4 @@ dependencies:
       - moabb>=1.5
       - pylsl>=1.16
       - ruff>=0.1
+      - pyriemann>=0.5

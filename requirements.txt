@@ -25,6 +25,9 @@ plotly>=5.17
 # Reporting
 openpyxl>=3.1
 
+# Riemannian Geometry
+pyriemann>=0.5
+
 # Dev / Testing
 pytest>=7.4
 black>=23.0

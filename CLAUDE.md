@@ -56,7 +56,7 @@ All commands below assume `conda activate bci` is active. Use `python`, not a ha
 │   ├── mne_pipeline.py      #   programmatic API
 │   ├── alignment.py         #   Euclidean Alignment (EA) cross-subject
 │   └── augment.py           #   on-the-fly augmentation
-├── features/              # csp.py (CSP + FBCSP), bandpower.py
+├── features/              # csp.py (CSP + FBCSP), riemann.py (Tangent/MDM/FgMDM), bandpower.py
 ├── models/
 │   ├── eegnet.py            # EEGNet (Lawhern 2018) — lazy classifier
 │   ├── attention.py         # ChannelAttention1D, MultiHeadChannelAttention,
@@ -350,23 +350,26 @@ MOTOR_CHANNELS_BCI4 = [
 
 ### PhysioNet MI (30 subjects, 8ch, binary LOSO)
 
-| Model | LOSO Accuracy | Kappa |
-|-------|--------------|-------|
-| EEGNet (base) | 51.93% ± 7.20% | 0.033 |
-| EEGNet + Few-shot FT (5 trials) | **54.95%** ± 8.04% | 0.099 |
-| EEGNet + SpatiotemporalAttn | **55.04%** ± 7.86% | 0.096 |
-
-> Random-split results (for pipeline validation only, not comparable):
-> CSP+SVM 38.6% (3-class), EEGNet 53.8% (3-class), EEGNet+Spatiotemporal 57.6% (3-class), 63.0% (2-class).
+| Method | Type | LOSO Accuracy | Kappa |
+|-------|------|--------------|-------|
+| EEGNet (base) | DL | 51.93% ± 7.20% | 0.033 |
+| EEGNet + Few-shot FT (5 trials) | DL | 54.95% ± 8.04% | 0.099 |
+| EEGNet + SpatiotemporalAttn | DL | 55.04% ± 7.86% | 0.096 |
+| MDM + EA | Riemannian | 56.30% ± 10.94% | 0.129 |
+| FgMDM + EA | Riemannian | 60.00% ± 9.04% | 0.198 |
+| **Tangent Space + LDA + EA** | **Riemannian** | **60.30%** ± 9.75% | **0.208** |
 
 ### BCI Competition IV 2a (9 subjects, 8ch, 4-class LOSO)
 
-| Model | 4-Class LOSO Accuracy | Kappa |
-|-------|----------------------|-------|
-| EEGNet (base) | **39.47%** ± 12.45% | 0.193 |
-| EEGNet + SpatiotemporalAttn | 36.94% ± 11.78% | 0.159 |
+| Method | Type | LOSO Accuracy | Kappa |
+|-------|------|--------------|-------|
+| MDM + EA | Riemannian | 33.43% ± 10.92% | 0.112 |
+| FgMDM + EA | Riemannian | 34.91% ± 8.48% | 0.132 |
+| EEGNet + SpatiotemporalAttn | DL | 36.94% ± 11.78% | 0.159 |
+| Tangent Space + LDA + EA | Riemannian | 38.60% ± 12.44% | 0.181 |
+| **EEGNet (base)** | **DL** | **39.47%** ± 12.45% | **0.193** |
 
-> Chance level: 25%. Best single subject: 62.8% (S03).
+> Key insight: Riemannian dominates DL by +8pp on binary, but EEGNet edges ahead on 4-class. The setting ceiling is ~60%, not ~55%.
 
 ## References
 
@@ -413,6 +416,7 @@ MOTOR_CHANNELS_BCI4 = [
 - [x] Domain adaptation losses (Center Loss + MMD)
 - [x] DeepBCI session loader (session → .npy training data)
 - [x] Full code review + bug fixes across all modules
-- [x] Test suite expanded (131 → 267 tests)
+- [x] Test suite expanded (131 → 304 tests)
+- [x] Riemannian Geometry baseline (Tangent Space / MDM / FgMDM) — 60.30% binary LOSO
 - [ ] Hyperparameter sweep (ready, needs GPU time)
 - [ ] Real-time LSL integration test with DeepBCI hardware
