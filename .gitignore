@@ -23,6 +23,7 @@ data/processed/*
 data/processed_*/
 data/loso_*/
 data/bci_iv_2a_processed/
+data/deepbci_processed/
 data/subjects/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
@@ -47,12 +48,16 @@ results/
 # Jupyter
 .ipynb_checkpoints/
 
+# pytest
+.pytest_cache/
+
 # OS
 .DS_Store
 Thumbs.db
 
-# Claude Code (local only)
+# Claude Code / Codex (local only)
 CLAUDE.md
+AGENTS.md
 .claude/
 
 # Environment

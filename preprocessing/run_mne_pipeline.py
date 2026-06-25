@@ -22,6 +22,8 @@ from utils.config import (
     MOTOR_CHANNELS, MOTOR_CHANNELS_16,
 )
 
+from preprocessing.alignment import EuclideanAlignment
+
 from datasets.label_mapping import (
     RAW_EVENT_TO_LABEL,
     DATASET_EVENT_SIGNATURES,
@@ -189,6 +191,10 @@ def main():
     parser.add_argument("--dataset", default="auto",
                         choices=["auto", "physionet_mi", "bci_iv_2a"],
                         help="Dataset for event→label mapping. 'auto' detects from event IDs.")
+    parser.add_argument("--align", action="store_true",
+                        help="Apply Euclidean Alignment (EA). "
+                             "With --per_subject: per-subject self-alignment. "
+                             "Without: global alignment across all subjects.")
     args = parser.parse_args()
 
     # Resolve channel picks
@@ -252,6 +258,10 @@ def main():
     if args.per_subject:
         output_dir = Path(args.output)
         for i, (X_subj, y_subj) in enumerate(zip(all_X, all_y)):
+            # Euclidean Alignment per subject (self-alignment)
+            if args.align:
+                ea = EuclideanAlignment()
+                X_subj = ea.fit_transform([X_subj])[0]
             # Apply binary filter per-subject if requested
             if args.binary:
                 mask = y_subj != 0
@@ -265,6 +275,12 @@ def main():
             print(f"Saved {subj_dir}/: X={X_subj.shape}, y={y_subj.shape}")
         print(f"\nPer-subject data saved to {output_dir}/subj_*/ for {len(all_X)} subjects")
         return
+
+    # Euclidean Alignment — global (across all subjects)
+    if args.align:
+        ea = EuclideanAlignment()
+        X_all = ea.fit_transform([X_all])[0]
+        print(f"EA aligned: X={X_all.shape}")
 
     # Train/val split (subject-independent: 75/25)
     try:

@@ -7,6 +7,7 @@ trained on N-1 subjects generalizes to a completely unseen subject.
 Supports:
     - Pure LOSO: train on 29 subjects, test on 1. Repeat 30x.
     - LOSO + Few-shot FT: fine-tune on k trials of the target subject.
+    - LOSO + FT Sweep: test multiple FT trial counts in one run.
 
 Usage:
     # Preprocess first:
@@ -15,10 +16,13 @@ Usage:
     # Then run LOSO:
     python training/train_loso.py --data_dir data/loso_binary --n_subjects 30 --epochs 60
     python training/train_loso.py --data_dir data/loso_binary --n_subjects 30 --finetune 10 --model eegnet_spatiotemporal
+    python training/train_loso.py --data_dir data/loso_binary --n_subjects 30 --epochs 60 --align
+    python training/train_loso.py --data_dir data/loso_binary --n_subjects 30 --epochs 60 --finetune_sweep 0,5,10,20,40
 
 Expected result: Within-subject MI binary typically 75-90% (vs 63% cross-subject).
 """
 import argparse
+import copy
 import csv
 import json
 import sys
@@ -34,6 +38,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from models.eegnet_attn import create_model
+from preprocessing.alignment import EuclideanAlignment
+from training.train_eegnet import load_checkpoint
 from utils.metrics import (
     classification_report,
     per_class_accuracy,
@@ -68,6 +74,7 @@ def train_on_subjects(
     epochs: int,
     batch_size: int,
     lr: float,
+    augment: bool = False,
     verbose: bool = False,
 ):
     """Train a model on a list of subjects' data. Returns trained model."""
@@ -75,16 +82,26 @@ def train_on_subjects(
     X_all = np.concatenate([s["X"] for s in train_subjects], axis=0)
     y_all = np.concatenate([s["y"] for s in train_subjects], axis=0)
 
+    if augment:
+        from preprocessing.augment import augment_dataset
+        X_all, y_all = augment_dataset(X_all, y_all, factor=2)
+        print(f"  Augmented: X={X_all.shape}, y={y_all.shape}")
+
     n_channels = X_all.shape[1]
     n_classes = len(np.unique(y_all))
+
+    model = create_model(model_type, n_channels=n_channels, n_classes=n_classes).to(device)
+
+    # Multi-band preprocessing (FBCNet)
+    if getattr(model, "input_requires_filter_bank", False):
+        from models.fbcnet import apply_filter_bank
+        X_all = apply_filter_bank(X_all)
 
     train_ds = TensorDataset(
         torch.from_numpy(X_all).float(),
         torch.from_numpy(y_all).long(),
     )
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
-
-    model = create_model(model_type, n_channels=n_channels, n_classes=n_classes).to(device)
 
     class_weights = compute_class_weight("balanced", classes=np.unique(y_all), y=y_all)
     class_weights = torch.tensor(class_weights, dtype=torch.float32, device=device)
@@ -110,6 +127,10 @@ def evaluate_on_subject(model, subject: dict, device: str) -> dict:
     """Evaluate model on a single subject. Returns metrics dict with per-class breakdown."""
     X_test = subject["X"]
     y_test = subject["y"]
+
+    if getattr(model, "input_requires_filter_bank", False):
+        from models.fbcnet import apply_filter_bank
+        X_test = apply_filter_bank(X_test)
 
     test_ds = TensorDataset(
         torch.from_numpy(X_test).float(),
@@ -150,6 +171,10 @@ def finetune_on_subject(
     """
     X = subject["X"]
     y = subject["y"]
+
+    if getattr(model, "input_requires_filter_bank", False):
+        from models.fbcnet import apply_filter_bank
+        X = apply_filter_bank(X)
 
     # Split: first n_finetune_trials per class for FT, rest for test
     n_classes = len(np.unique(y))
@@ -219,9 +244,14 @@ def main():
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--model", default="eegnet",
-                        choices=["eegnet", "eegnet_spatiotemporal"])
+                        choices=["eegnet", "eegnet_spatiotemporal",
+                                 "fbcnet", "eeg_tcnet",
+                                 "eeg_conformer"])
     parser.add_argument("--finetune", type=int, default=0,
                         help="Few-shot FT trials per class (0 = pure LOSO)")
+    parser.add_argument("--finetune_sweep", type=str, default=None,
+                        help="Comma-separated FT trial counts, e.g. '0,5,10,20,40'. "
+                             "Mutually exclusive with --finetune.")
     parser.add_argument("--device", default=None)
     parser.add_argument("--skip_train", action="store_true",
                         help="Skip per-fold training (use pre-trained checkpoint)")
@@ -232,10 +262,29 @@ def main():
     parser.add_argument("--dataset", default="physionet_mi",
                         choices=["physionet_mi", "bci_iv_2a", "deepbci"],
                         help="Dataset name for semantic class labels in CSV header")
+    parser.add_argument("--align", action="store_true",
+                        help="Apply Euclidean Alignment (EA) inside each LOSO fold "
+                             "(R_bar computed from training subjects only)")
+    parser.add_argument("--augment", action="store_true",
+                        help="Apply data augmentation (2x) to training data")
     args = parser.parse_args()
 
+    if args.finetune > 0 and args.finetune_sweep:
+        parser.error("--finetune and --finetune_sweep are mutually exclusive.")
+    if args.skip_train and not args.checkpoint:
+        parser.error("--skip_train requires --checkpoint.")
+    if args.checkpoint and not args.skip_train:
+        print("WARNING: --checkpoint is only used with --skip_train; training will run normally.")
+
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Device: {device}  Model: {args.model}  FT: {args.finetune} trials/class")
+
+    # Resolve finetune sweep
+    ft_sweep = None
+    if args.finetune_sweep:
+        ft_sweep = [int(x.strip()) for x in args.finetune_sweep.split(",")]
+        print(f"Device: {device}  Model: {args.model}  FT sweep: {ft_sweep}")
+    else:
+        print(f"Device: {device}  Model: {args.model}  FT: {args.finetune} trials/class")
 
     # Load per-subject data
     subjects = load_per_subject_data(args.data_dir, args.n_subjects)
@@ -265,87 +314,180 @@ def main():
         print(f"Fold {i+1}/{len(subjects)}: Test=S{test_id:02d}, Train={len(train_subjs)} subjects")
         print(f"{'='*50}")
 
-        # Train on N-1 subjects
-        model = train_on_subjects(
-            train_subjs, args.model, device,
-            epochs=args.epochs, batch_size=args.batch_size, lr=args.lr,
-        )
+        # ── Euclidean Alignment (per-fold, no data leakage) ──────────
+        if args.align:
+            ea = EuclideanAlignment()
+            ea.fit([s["X"] for s in train_subjs])
+            # Work on fresh dicts to avoid mutating shared subject data
+            _train = []
+            for s in train_subjs:
+                _train.append({"id": s["id"],
+                               "X": ea.transform(s["X"]), "y": s["y"]})
+            train_subjs = _train
+            test_subj = {"id": test_subj["id"],
+                         "X": ea.transform(test_subj["X"]), "y": test_subj["y"]}
 
-        if args.finetune > 0:
-            model, metrics = finetune_on_subject(
-                model, test_subj, n_finetune_trials=args.finetune,
-                device=device,
-            )
-            print(f"  FT+Test: acc={metrics['accuracy']:.4f}  kappa={metrics['kappa']:.4f}")
+        # Train on N-1 subjects, or load a fixed base checkpoint for evaluation/FT.
+        if args.skip_train:
+            model = load_checkpoint(args.checkpoint, device)
+            model_type = getattr(model, "model_type", args.model)
+            print(f"  Skip train: loaded {model_type} from {args.checkpoint}")
         else:
-            metrics = evaluate_on_subject(model, test_subj, device)
-            print(f"  Test:    acc={metrics['accuracy']:.4f}  kappa={metrics['kappa']:.4f}")
+            model = train_on_subjects(
+                train_subjs, args.model, device,
+                epochs=args.epochs, batch_size=args.batch_size, lr=args.lr,
+                augment=args.augment,
+            )
+            model_type = args.model
+        base_state = copy.deepcopy(model.state_dict())
 
-        # Build per-subject row
-        row = {
-            "subject": f"S{test_id:02d}",
-            "accuracy": metrics["accuracy"],
-            "macro_f1": metrics["f1_macro"],
-            "kappa": metrics["kappa"],
-            "n_trials": metrics["n_trials"],
-        }
-        for cls_id, rec in metrics["per_class_recall"].items():
-            cls_name = (
-                semantic_names[cls_id] if cls_id < len(semantic_names)
-                else f"cls_{cls_id}"
-            )
-            row[f"recall_{cls_name}"] = rec
-        for cls_id, spec in metrics["per_class_specificity"].items():
-            cls_name = (
-                semantic_names[cls_id] if cls_id < len(semantic_names)
-                else f"cls_{cls_id}"
-            )
-            row[f"specificity_{cls_name}"] = spec
-        per_subject_results.append(row)
+        if ft_sweep is not None:
+            # ── FT Sweep mode ──────────────────────────────────────
+            row = {"subject": f"S{test_id:02d}"}
+            for ft_n in ft_sweep:
+                if ft_n == 0:
+                    metrics = evaluate_on_subject(model, test_subj, device)
+                    print(f"  FT={ft_n:>2d}:  acc={metrics['accuracy']:.4f}  "
+                          f"kappa={metrics['kappa']:.4f}")
+                else:
+                    # Fresh model copy for each FT count.
+                    model_ft = copy.deepcopy(model)
+                    model_ft.load_state_dict(base_state)
+                    _, metrics = finetune_on_subject(
+                        model_ft, test_subj,
+                        n_finetune_trials=ft_n, device=device,
+                    )
+                    print(f"  FT={ft_n:>2d}:  acc={metrics['accuracy']:.4f}  "
+                          f"kappa={metrics['kappa']:.4f}")
+                    del model_ft
+
+                row[f"acc_ft{ft_n}"] = metrics["accuracy"]
+                row[f"kappa_ft{ft_n}"] = metrics["kappa"]
+            per_subject_results.append(row)
+
+        else:
+            # ── Single FT / pure LOSO mode ─────────────────────────
+            if args.finetune > 0:
+                model, metrics = finetune_on_subject(
+                    model, test_subj, n_finetune_trials=args.finetune,
+                    device=device,
+                )
+                print(f"  FT+Test: acc={metrics['accuracy']:.4f}  "
+                      f"kappa={metrics['kappa']:.4f}")
+            else:
+                metrics = evaluate_on_subject(model, test_subj, device)
+                print(f"  Test:    acc={metrics['accuracy']:.4f}  "
+                      f"kappa={metrics['kappa']:.4f}")
+
+            row = {
+                "subject": f"S{test_id:02d}",
+                "accuracy": metrics["accuracy"],
+                "macro_f1": metrics["f1_macro"],
+                "kappa": metrics["kappa"],
+                "n_trials": metrics["n_trials"],
+            }
+            for cls_id, rec in metrics["per_class_recall"].items():
+                cls_name = (
+                    semantic_names[cls_id] if cls_id < len(semantic_names)
+                    else f"cls_{cls_id}"
+                )
+                row[f"recall_{cls_name}"] = rec
+            for cls_id, spec in metrics["per_class_specificity"].items():
+                cls_name = (
+                    semantic_names[cls_id] if cls_id < len(semantic_names)
+                    else f"cls_{cls_id}"
+                )
+                row[f"specificity_{cls_name}"] = spec
+            per_subject_results.append(row)
 
         del model
 
-    # ---- Export CSV ----
+    # ---- Export ----
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     ds_tag = f"_{args.dataset}" if args.dataset != "physionet_mi" else ""
     ft_tag = f"_ft{args.finetune}" if args.finetune > 0 else ""
-    csv_path = output_dir / f"loso_{args.model}{ds_tag}{ft_tag}.csv"
+    ea_tag = "_ea" if args.align else ""
 
-    if per_subject_results:
-        fieldnames = list(per_subject_results[0].keys())
-        with open(csv_path, "w", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(per_subject_results)
+    if ft_sweep is not None:
+        # ── FT Sweep CSV ────────────────────────────────────────────
+        sweep_tag = f"_ftsweep{ea_tag}"
+        csv_path = output_dir / f"loso_{args.model}{ds_tag}{sweep_tag}.csv"
 
-    # ---- Export Summary JSON ----
-    accs = np.array([r["accuracy"] for r in per_subject_results])
-    kappas = np.array([r["kappa"] for r in per_subject_results])
+        if per_subject_results:
+            fieldnames = list(per_subject_results[0].keys())
+            # Reorder: subject, then sorted FT columns
+            ft_keys = sorted(
+                [k for k in fieldnames if k.startswith("acc_ft")],
+                key=lambda k: int(k.split("ft")[1]),
+            )
+            kappa_keys = sorted(
+                [k for k in fieldnames if k.startswith("kappa_ft")],
+                key=lambda k: int(k.split("ft")[1]),
+            )
+            ordered = ["subject"] + [
+                x for pair in zip(ft_keys, kappa_keys) for x in pair
+            ]
+            with open(csv_path, "w", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=ordered, extrasaction="ignore")
+                writer.writeheader()
+                writer.writerows(per_subject_results)
 
-    summary = {
-        "model": args.model,
-        "dataset": args.dataset,
-        "n_subjects": len(subjects),
-        "finetune_trials": args.finetune,
-        "accuracy_mean": round(float(accs.mean()), 4),
-        "accuracy_std": round(float(accs.std()), 4),
-        "kappa_mean": round(float(kappas.mean()), 4),
-        "kappa_std": round(float(kappas.std()), 4),
-        "per_subject": per_subject_results,
-    }
-    json_path = output_dir / f"loso_{args.model}{ds_tag}{ft_tag}_summary.json"
+        # ── FT Sweep Summary ────────────────────────────────────────
+        summary = {
+            "model": args.model,
+            "dataset": args.dataset,
+            "n_subjects": len(subjects),
+            "finetune_counts": ft_sweep,
+            "align": args.align,
+            "per_subject": per_subject_results,
+        }
+        print("\n" + "=" * 60)
+        print("LOSO FT Sweep Summary")
+        print("=" * 60)
+        for ft_n in ft_sweep:
+            acc_key = f"acc_ft{ft_n}"
+            vals = np.array([r[acc_key] for r in per_subject_results])
+            summary[f"ft{ft_n}_acc_mean"] = round(float(vals.mean()), 4)
+            summary[f"ft{ft_n}_acc_std"] = round(float(vals.std()), 4)
+            print(f"FT={ft_n:>2d}:  acc={vals.mean():.4f} ± {vals.std():.4f}")
+        json_path = output_dir / f"loso_{args.model}{ds_tag}{sweep_tag}_summary.json"
+
+    else:
+        # ── Single FT / pure LOSO CSV ───────────────────────────────
+        csv_path = output_dir / f"loso_{args.model}{ds_tag}{ft_tag}{ea_tag}.csv"
+        if per_subject_results:
+            fieldnames = list(per_subject_results[0].keys())
+            with open(csv_path, "w", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(per_subject_results)
+
+        accs = np.array([r["accuracy"] for r in per_subject_results])
+        kappas = np.array([r["kappa"] for r in per_subject_results])
+        summary = {
+            "model": args.model,
+            "dataset": args.dataset,
+            "n_subjects": len(subjects),
+            "finetune_trials": args.finetune,
+            "align": args.align,
+            "accuracy_mean": round(float(accs.mean()), 4),
+            "accuracy_std": round(float(accs.std()), 4),
+            "kappa_mean": round(float(kappas.mean()), 4),
+            "kappa_std": round(float(kappas.std()), 4),
+            "per_subject": per_subject_results,
+        }
+        print("\n" + "=" * 60)
+        print("LOSO Summary")
+        print("=" * 60)
+        print(f"Accuracy:  mean={accs.mean():.4f}  std={accs.std():.4f}")
+        print(f"Kappa:     mean={kappas.mean():.4f}  std={kappas.std():.4f}")
+        print(f"Per-subject: {[f'{a:.3f}' for a in accs]}")
+        print(f"Best/Worst: {accs.max():.4f} / {accs.min():.4f}")
+        json_path = output_dir / f"loso_{args.model}{ds_tag}{ft_tag}{ea_tag}_summary.json"
+
     with open(json_path, "w") as f:
         json.dump(summary, f, indent=2)
-
-    # ---- Final Summary ----
-    print("\n" + "=" * 60)
-    print("LOSO Summary")
-    print("=" * 60)
-    print(f"Accuracy:  mean={accs.mean():.4f}  std={accs.std():.4f}")
-    print(f"Kappa:     mean={kappas.mean():.4f}  std={kappas.std():.4f}")
-    print(f"Per-subject: {[f'{a:.3f}' for a in accs]}")
-    print(f"Best/Worst: {accs.max():.4f} / {accs.min():.4f}")
     print(f"\nCSV saved to {csv_path}")
     print(f"JSON saved to {json_path}")
 

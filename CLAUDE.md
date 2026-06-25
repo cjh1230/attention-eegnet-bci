@@ -54,14 +54,19 @@ All commands below assume `conda activate bci` is active. Use `python`, not a ha
 │   ├── epoching.py          #   epoch creation
 │   ├── artifact.py          #   ICA removal
 │   ├── mne_pipeline.py      #   programmatic API
+│   ├── alignment.py         #   Euclidean Alignment (EA) cross-subject
 │   └── augment.py           #   on-the-fly augmentation
-├── features/              # csp.py, bandpower.py
+├── features/              # csp.py (CSP + FBCSP), bandpower.py
 ├── models/
-│   ├── eegnet.py           # EEGNet (Lawhern 2018) — lazy classifier
-│   ├── attention.py        # ChannelAttention1D, MultiHeadChannelAttention,
-│   │                       #   TemporalAttention, SpatiotemporalAttention
-│   ├── eegnet_attn.py      # EEGNet + attention deep integration (5 variants)
-│   └── fusion.py           # MultiBandFusion (mu/beta/full)
+│   ├── eegnet.py            # EEGNet (Lawhern 2018) — lazy classifier
+│   ├── attention.py         # ChannelAttention1D, MultiHeadChannelAttention,
+│   │                        #   TemporalAttention, SpatiotemporalAttention
+│   ├── eegnet_attn.py       # EEGNet + attention deep integration (5 variants)
+│   ├── eeg_conformer.py     # EEG Conformer (CNN + Transformer, Song 2023)
+│   ├── eeg_tcnet.py         # EEG-TCNet (CNN + TCN, Ingolfsson 2020)
+│   ├── fbcnet.py            # FBCNet (Filter-Bank CNN, Bakshi 2021)
+│   ├── fusion.py            # MultiBandFusion (mu/beta/full)
+│   └── mixstyle.py          # MixStyle domain generalization (Zhou, ICLR 2021)
 ├── training/
 │   ├── train_eegnet.py     # main training script (6 new features)
 │   ├── train_baseline.py   # CSP+SVM baseline
@@ -81,6 +86,7 @@ All commands below assume `conda activate bci` is active. Use `python`, not a ha
 ├── utils/
 │   ├── config.py           # global config — EDIT THIS for channel changes
 │   ├── metrics.py          # classification_report, per_class_accuracy
+│   ├── domain_adapt.py     # domain adaptation losses (Center Loss + MMD)
 │   ├── report_excel.py     # 5-sheet Excel validation report (competition format)
 │   └── logger.py           # ExperimentLogger (CSV)
 ├── ui/                    # dashboard.py (Streamlit, Synthetic + File Replay)
@@ -88,7 +94,7 @@ All commands below assume `conda activate bci` is active. Use `python`, not a ha
 │   ├── run_all_experiments.py      # One-command full pipeline
 │   ├── export_competition_excel.py # Competition-format Excel
 │   └── make_report_figures.py      # Confusion matrix / bar charts / ablation
-├── tests/                 # 131 unit tests (pytest)
+├── tests/                 # 267 unit tests (pytest)
 ├── main.py                # Single entry point (16 commands)
 ├── environment.yml
 └── requirements.txt
@@ -127,7 +133,7 @@ python data/download.py --sample         # MNE sample data for quick test
 
 ```bash
 black . && ruff check .              # Format + lint
-pytest                               # Run all tests (131)
+pytest                               # Run all tests (267)
 pytest tests/ -v                     # Verbose, single file
 ```
 
@@ -183,6 +189,13 @@ python main.py demo --source replay --data data/loso_binary/subj_01/X.npy \
     --checkpoint checkpoints/eegnet_spatiotemporal_best.pt --gating # + idle gating
 python main.py demo --all-subjects --source replay \
     --checkpoint checkpoints/eegnet_spatiotemporal_best.pt          # batch all subjects
+```
+
+### DeepBCI
+
+```bash
+python datasets/deepbci_loader.py -i data/subjects/sub_001/session_xxx   # Single session → .npy
+python datasets/deepbci_loader.py --all                                  # All sessions
 ```
 
 ### Reports
@@ -263,7 +276,7 @@ Saved to `checkpoints/{model_type}_best.pt` by default.
 
 ### Model factory
 
-Use `create_model()` from `models/eegnet_attn.py` to instantiate any variant:
+Use `create_model()` from `models/eegnet_attn.py` to instantiate any EEGNet variant:
 
 ```python
 from models.eegnet_attn import create_model
@@ -271,6 +284,44 @@ from models.eegnet_attn import create_model
 model = create_model("eegnet", n_channels=8, n_classes=3)
 model = create_model("eegnet_spatiotemporal", n_channels=8, n_classes=3)
 model = create_model("eegnet_mhsa", n_channels=8, n_classes=3)
+```
+
+### New model architectures (Sprint 1.5)
+
+```python
+from models.eeg_conformer import EEGConformer
+from models.eeg_tcnet import EEGTCNet
+from models.fbcnet import FBCNet, apply_filter_bank
+from models.mixstyle import MixStyle1d, MixStyle2d
+
+# EEG Conformer: CNN backbone + Transformer encoder
+model = EEGConformer(n_channels=8, n_classes=3, d_model=64, n_heads=4, n_layers=2)
+
+# EEG-TCNet: EEGNet Block1 + TCN (temporal conv net)
+model = EEGTCNet(n_channels=8, n_classes=3, F1=8, D=2, kernel_size=16)
+
+# FBCNet: Filter-bank CNN (requires multi-band input)
+X_bands = apply_filter_bank(X, fs=250)  # (N, C, T) → (N, n_bands, C, T)
+model = FBCNet(n_bands=9, n_channels=8, n_classes=3)
+
+# MixStyle: domain generalization via feature-statistics mixing
+self.mixstyle = MixStyle2d(p=0.5, alpha=0.1)  # insert after BN/activation
+```
+
+### Domain adaptation & alignment
+
+```python
+from preprocessing.alignment import EuclideanAlignment
+from utils.domain_adapt import center_loss, multi_kernel_mmd
+
+# Euclidean Alignment: align covariance across subjects (unsupervised)
+ea = EuclideanAlignment()
+ea.fit([train_subj_X, ...])  # compute reference covariance
+aligned = ea.transform(X)     # apply alignment
+
+# Center Loss: pull same-class features toward shared centers
+loss_ct, centers = center_loss(features, labels, n_classes=3, centers=centers)
+loss = ce_loss + 0.01 * loss_ct
 ```
 
 ### 8ch Montage Configuration
@@ -327,7 +378,7 @@ MOTOR_CHANNELS_BCI4 = [
 
 ## Current Sprint
 
-**Sprint 1** (now → July 10): Refinement + results.
+**Sprint 1.5** (June 2026): Model zoo + domain generalization + code review.
 
 - [x] Repo structure + skeleton modules
 - [x] MNE preprocessing (PhysioNet MI, 30 subjects)
@@ -340,7 +391,7 @@ MOTOR_CHANNELS_BCI4 = [
 - [x] Streamlit dashboard (model loading, CSV export)
 - [x] 8-channel adaptation (hardware-aligned montage)
 - [x] BCI Competition IV 2a dataset (downloaded)
-- [x] Unit test suite (131 tests)
+- [x] Unit test suite (267 tests)
 - [x] Excel validation report generator
 - [x] CSP baseline: 38.6% (3-class, 8ch)
 - [x] EEGNet: 57.6% (3-class, 8ch), 63.0% (2-class, 8ch)
@@ -353,5 +404,15 @@ MOTOR_CHANNELS_BCI4 = [
 - [x] Dashboard File Replay integration (Synthetic + File Replay, dynamic n_classes)
 - [x] Multi-subject batch demo (--all-subjects)
 - [x] Action map fix (binary/4-class gating, auto-idle detection)
+- [x] FBCSP feature extraction (Filter Bank CSP + LDA/SVM)
+- [x] EEG Conformer model (CNN + Transformer for MI-EEG)
+- [x] EEG-TCNet model (CNN + TCN for embedded deployment)
+- [x] FBCNet model (Filter-Bank CNN with variance pooling)
+- [x] MixStyle domain generalization (feature-statistics mixing)
+- [x] Euclidean Alignment (EA) cross-subject covariance alignment
+- [x] Domain adaptation losses (Center Loss + MMD)
+- [x] DeepBCI session loader (session → .npy training data)
+- [x] Full code review + bug fixes across all modules
+- [x] Test suite expanded (131 → 267 tests)
 - [ ] Hyperparameter sweep (ready, needs GPU time)
 - [ ] Real-time LSL integration test with DeepBCI hardware

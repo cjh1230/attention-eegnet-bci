@@ -10,6 +10,9 @@ scikit-learn>=1.3
 torch>=2.1
 torchvision>=0.16
 
+# Hyperparameter Search
+optuna>=3.5
+
 # Real-time & Streaming
 pylsl>=1.16
 # brainflow>=5.12  # uncomment if using BrainFlow SDK
@@ -18,6 +21,9 @@ pylsl>=1.16
 streamlit>=1.28
 matplotlib>=3.7
 plotly>=5.17
+
+# Reporting
+openpyxl>=3.1
 
 # Dev / Testing
 pytest>=7.4

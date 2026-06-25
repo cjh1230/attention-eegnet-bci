@@ -27,7 +27,6 @@ from sklearn.model_selection import StratifiedKFold
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from models.eegnet import EEGNet
 from models.eegnet_attn import create_model
 from utils.config import BATCH_SIZE, EPOCHS as DEFAULT_EPOCHS, LEARNING_RATE
 from utils.logger import ExperimentLogger
@@ -35,26 +34,81 @@ from utils.metrics import classification_report, per_class_accuracy
 from sklearn.metrics import confusion_matrix
 
 
-def load_checkpoint(ckpt_path: str, device: str = "cpu") -> EEGNet:
-    """Load a saved EEGNet checkpoint, handling lazy classifier init."""
-    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
-    cfg = ckpt["config"]
-    model = EEGNet(
-        n_channels=cfg["n_channels"],
-        n_classes=cfg["n_classes"],
-        F1=cfg.get("F1", 8),
-        D=cfg.get("D", 2),
-        F2=cfg.get("F2", 16),
-        dropout=cfg.get("dropout", 0.5),
-    )
-    # Warm-up forward to build the lazy classifier
-    dummy = torch.zeros(1, cfg["n_channels"], cfg.get("n_times", 750))
+def _infer_model_type(ckpt: dict, ckpt_path: str) -> str:
+    """Return checkpoint model type with filename fallback for old checkpoints."""
+    model_type = ckpt.get("model_type") or ckpt.get("config", {}).get("model_type")
+    if model_type:
+        return model_type
+
+    name = Path(ckpt_path).name
+    for candidate in [
+        "eegnet_spatiotemporal",
+        "eegnet_temporal",
+        "eegnet_mhsa",
+        "eegnet_se",
+        "eeg_conformer",
+        "eeg_tcnet",
+        "fbcnet",
+    ]:
+        if candidate in name:
+            return candidate
+    return "eegnet"
+
+
+def _checkpoint_model_kwargs(model_type: str, cfg: dict) -> dict:
+    """Build constructor kwargs supported by the checkpoint model type."""
+    kwargs = {
+        "n_channels": cfg["n_channels"],
+        "n_classes": cfg["n_classes"],
+    }
+    if model_type.startswith("eegnet") or model_type == "eeg_tcnet":
+        kwargs.update(
+            F1=cfg.get("F1", 8),
+            D=cfg.get("D", 2),
+            F2=cfg.get("F2", 16),
+            dropout=cfg.get("dropout", 0.5),
+        )
+    elif model_type == "eeg_conformer":
+        kwargs.update(
+            F1=cfg.get("F1", 8),
+            D=cfg.get("D", 2),
+            dropout=cfg.get("dropout", 0.5),
+        )
+    elif model_type == "fbcnet":
+        kwargs.update(dropout=cfg.get("dropout", 0.5))
+    return kwargs
+
+
+def warmup_model(model: nn.Module, n_channels: int, n_times: int, device: str) -> None:
+    """Run one dummy forward for lazy classifiers before loading weights."""
+    if getattr(model, "input_requires_filter_bank", False):
+        n_bands = getattr(model, "n_bands", 9)
+        dummy = torch.zeros(1, n_bands, n_channels, n_times, device=device)
+    else:
+        dummy = torch.zeros(1, n_channels, n_times, device=device)
     model.eval()
     with torch.no_grad():
         model(dummy)
+
+
+def load_checkpoint(ckpt_path: str, device: str = "cpu") -> nn.Module:
+    """Load a saved checkpoint, handling architecture and lazy classifier init."""
+    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+    cfg = ckpt["config"]
+    model_type = _infer_model_type(ckpt, ckpt_path)
+    model = create_model(
+        model_type,
+        **_checkpoint_model_kwargs(model_type, cfg),
+    ).to(device)
+
+    warmup_model(model, cfg["n_channels"], cfg.get("n_times", 750), device)
     model.load_state_dict(ckpt["state_dict"])
-    model = model.to(device).eval()
-    print(f"Loaded checkpoint: epoch={ckpt['epoch']}, acc={ckpt['acc']:.4f}")
+    model.model_type = model_type
+    model.eval()
+    print(
+        f"Loaded checkpoint: model={model_type}, "
+        f"epoch={ckpt['epoch']}, acc={ckpt['acc']:.4f}"
+    )
     return model
 
 
@@ -125,6 +179,7 @@ def train(
     save_path: str = None,
     model_type: str = "eegnet",
     augment: bool = False,
+    mixup_alpha: float = 0.0,
     label_smoothing: float = 0.0,
     grad_clip: float = 0.0,
     early_stop: int = 0,
@@ -135,7 +190,8 @@ def train(
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
-    print(f"Model: {model_type}  Augment: {augment}  LabelSmooth: {label_smoothing}  Loss: {loss_type}")
+    print(f"Model: {model_type}  Augment: {augment}  Mixup: {mixup_alpha}  "
+          f"LabelSmooth: {label_smoothing}  Loss: {loss_type}")
     print(f"GradClip: {grad_clip}  EarlyStop: {early_stop}  KFold: {kfold}")
 
     X_train, y_train, X_val, y_val = load_data(data_dir)
@@ -182,7 +238,7 @@ def train(
         X_train, y_train, X_val, y_val,
         model_type, n_channels, n_classes, device,
         epochs, batch_size, lr, label_smoothing, grad_clip, early_stop,
-        loss_type=loss_type,
+        mixup_alpha=mixup_alpha, loss_type=loss_type,
         save_path=save_path,
     )
     return model, best_ckpt
@@ -192,10 +248,23 @@ def _train_one_run(
     X_train, y_train, X_val, y_val,
     model_type, n_channels, n_classes, device,
     epochs, batch_size, lr, label_smoothing, grad_clip, early_stop,
+    mixup_alpha=0.0,
     loss_type="ce",
     save_path=None,
 ):
     """Single train/val run with full logging and checkpointing."""
+    # ---- Model ----
+    model = create_model(model_type, n_channels=n_channels, n_classes=n_classes)
+    model = model.to(device)
+
+    # ---- Multi-band preprocessing (FBCNet) ----
+    if getattr(model, "input_requires_filter_bank", False):
+        from models.fbcnet import apply_filter_bank
+        print("Applying filter bank (9 bands)...")
+        X_train = apply_filter_bank(X_train)
+        X_val = apply_filter_bank(X_val)
+        print(f"  Train: {X_train.shape}, Val: {X_val.shape}")
+
     # ---- DataLoaders ----
     train_ds = TensorDataset(
         torch.from_numpy(X_train).float(),
@@ -207,10 +276,6 @@ def _train_one_run(
     )
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_ds, batch_size=batch_size)
-
-    # ---- Model ----
-    model = create_model(model_type, n_channels=n_channels, n_classes=n_classes)
-    model = model.to(device)
 
     # ---- Loss ----
     class_weights = compute_class_weight("balanced", classes=np.unique(y_train), y=y_train)
@@ -241,9 +306,21 @@ def _train_one_run(
         train_loss = 0.0
         for Xb, yb in train_loader:
             Xb, yb = Xb.to(device), yb.to(device)
+            # Mixup
+            if mixup_alpha > 0:
+                from preprocessing.augment import mixup_batch, mixup_criterion
+                Xb_np = Xb.cpu().numpy()
+                yb_np = yb.cpu().numpy()
+                Xb_mixed, y_a, y_b, lam = mixup_batch(Xb_np, yb_np, alpha=mixup_alpha)
+                Xb = torch.from_numpy(Xb_mixed).float().to(device)
+                y_a = torch.from_numpy(y_a).long().to(device)
+                y_b = torch.from_numpy(y_b).long().to(device)
             optimizer.zero_grad()
             logits = model(Xb)
-            loss = criterion(logits, yb)
+            if mixup_alpha > 0:
+                loss = mixup_criterion(criterion, logits, y_a, y_b, lam)
+            else:
+                loss = criterion(logits, yb)
             loss.backward()
             if grad_clip > 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
@@ -292,17 +369,21 @@ def _train_one_run(
             best_labels = y_true.copy()
             best_ckpt = {
                 "epoch": epoch,
+                "model_type": model_type,
                 "state_dict": model.state_dict(),
                 "opt": optimizer.state_dict(),
                 "acc": best_acc,
                 "config": {
                     "n_channels": n_channels,
                     "n_classes": n_classes,
-                    "n_times": X_train.shape[2],
-                    "F1": model.F1 if hasattr(model, 'F1') else 8,
-                    "D": model.D if hasattr(model, 'D') else 2,
-                    "F2": model.F2 if hasattr(model, 'F2') else 16,
-                    "dropout": model.drop1.p if hasattr(model, 'drop1') else 0.5,
+                    "n_times": X_train.shape[-1],
+                    "F1": getattr(model, "F1", 8),
+                    "D": getattr(model, "D", 2),
+                    "F2": getattr(model, "F2", 16),
+                    "dropout": (
+                        model.drop1.p if hasattr(model, "drop1")
+                        else getattr(model, "dropout", 0.5)
+                    ),
                 },
             }
             patience_counter = 0
@@ -339,6 +420,15 @@ def _train_one_fold(
     fold_label="",
 ):
     """Train on one fold and return best validation accuracy (lightweight)."""
+    # Multi-band preprocessing for FBCNet
+    model_temp = create_model(model_type, n_channels=n_channels,
+                               n_classes=n_classes)
+    if getattr(model_temp, "input_requires_filter_bank", False):
+        from models.fbcnet import apply_filter_bank
+        X_train = apply_filter_bank(X_train)
+        X_val = apply_filter_bank(X_val)
+    del model_temp
+
     train_ds = TensorDataset(
         torch.from_numpy(X_train).float(), torch.from_numpy(y_train).long()
     )
@@ -411,8 +501,11 @@ if __name__ == "__main__":
     parser.add_argument("--save_path", default=None)
     parser.add_argument("--model", default="eegnet",
                         choices=["eegnet", "eegnet_se", "eegnet_mhsa",
-                                 "eegnet_temporal", "eegnet_spatiotemporal"])
+                                 "eegnet_temporal", "eegnet_spatiotemporal",
+                                 "fbcnet", "eeg_tcnet", "eeg_conformer"])
     parser.add_argument("--augment", action="store_true", help="Apply data augmentation")
+    parser.add_argument("--mixup", type=float, default=0.0,
+                        help="Mixup alpha (0 = disabled, e.g. 0.2)")
     parser.add_argument("--label_smoothing", type=float, default=0.0,
                         help="Label smoothing factor (e.g., 0.1)")
     parser.add_argument("--grad_clip", type=float, default=0.0,
@@ -433,6 +526,7 @@ if __name__ == "__main__":
         save_path=args.save_path,
         model_type=args.model,
         augment=args.augment,
+        mixup_alpha=args.mixup,
         label_smoothing=args.label_smoothing,
         grad_clip=args.grad_clip,
         early_stop=args.early_stop,

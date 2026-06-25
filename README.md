@@ -1,10 +1,10 @@
 # 基于运动想象的脑-机交互算法研究
 
-> **XH-202610** · 挑战杯 2026 · `master` [![tests](https://img.shields.io/badge/tests-131%20passed-brightgreen)]()
+> **XH-202610** · 挑战杯 2026 · `master` [![tests](https://img.shields.io/badge/tests-267%20passed-brightgreen)]()
 
 基于运动想象（Motor Imagery）的脑-机接口算法研究与实时系统。使用 MNE-Python 预处理、EEGNet + 时空注意力深度学习模型，实现高精度跨被试 MI 识别。
 
-**关键词**：运动想象 · EEGNet · 时空注意力 · LOSO 交叉验证 · 在线闭环 · 空闲门控
+**关键词**：运动想象 · EEGNet · 时空注意力 · EEG Conformer · FBCNet · 域泛化 · LOSO 交叉验证 · 在线闭环 · 空闲门控
 
 ---
 
@@ -91,7 +91,10 @@ python main.py demo --source replay --data data/loso_binary/subj_01/X.npy \
 │   └── download.py                 # 数据集自动下载
 ├── datasets/                       # ★ 数据集标签映射与元数据
 │   ├── label_mapping.py            #   规范标签映射 (单点真理)
-│   └── metadata.py                 #   数据集元数据导出
+│   ├── metadata.py                 #   数据集元数据导出
+│   └── deepbci_loader.py           #   DeepBCI 会话 → .npy 训练数据
+├── features/                       # ★ 特征提取 (CSP + FBCSP)
+│   └── csp.py                      #   CSP/FBCSP + SVM/LDA
 ├── preprocessing/
 │   ├── run_mne_pipeline.py         # ★ PhysioNet MNE 预处理 (motor8/motor16/all)
 │   ├── prepare_bci_iv_2a.py        # ★ BCI IV 2a MOABB .npy → 8ch per-subject
@@ -99,12 +102,17 @@ python main.py demo --source replay --data data/loso_binary/subj_01/X.npy \
 │   ├── epoching.py                 #   事件分段
 │   ├── artifact.py                 #   ICA 去伪迹
 │   ├── mne_pipeline.py             #   编程 API
+│   ├── alignment.py                #   Euclidean Alignment 跨被试协方差对齐
 │   └── augment.py                  #   数据增强
 ├── models/
 │   ├── eegnet.py                   # EEGNet (Lawhern 2018, lazy classifier)
 │   ├── attention.py                # 注意力模块 (SE/MHSA/Temporal/Spatiotemporal)
 │   ├── eegnet_attn.py              # EEGNet + 注意力 (5 变体 + 工厂函数)
-│   └── fusion.py                   # 多频段融合 (μ/β/full)
+│   ├── eeg_conformer.py            # EEG Conformer (CNN + Transformer, Song 2023)
+│   ├── eeg_tcnet.py                # EEG-TCNet (CNN + TCN, Ingolfsson 2020)
+│   ├── fbcnet.py                   # FBCNet (Filter-Bank CNN, Bakshi 2021)
+│   ├── fusion.py                   # 多频段融合 (μ/β/full)
+│   └── mixstyle.py                 # MixStyle 域泛化 (Zhou, ICLR 2021)
 ├── training/
 │   ├── train_eegnet.py             # ★ 训练脚本 (增强/平滑/早停/裁剪/K折)
 │   ├── train_baseline.py           #   CSP+SVM 基线
@@ -127,6 +135,7 @@ python main.py demo --source replay --data data/loso_binary/subj_01/X.npy \
 ├── utils/
 │   ├── config.py                   # ★ 全局配置 (8ch montage)
 │   ├── metrics.py                  # 分类指标
+│   ├── domain_adapt.py             # 域自适应损失 (Center Loss + MMD)
 │   ├── report_excel.py             # Excel 验证报告 (5-Sheet 竞赛格式)
 │   └── logger.py                   # 实验日志
 ├── ui/
@@ -135,7 +144,7 @@ python main.py demo --source replay --data data/loso_binary/subj_01/X.npy \
 │   ├── run_all_experiments.py      # 全流程一键运行
 │   ├── export_competition_excel.py # Excel 报告导出
 │   └── make_report_figures.py      # 图表生成 (混淆矩阵/消融/逐被试)
-├── tests/                          # ★ 131 个单元测试
+├── tests/                          # ★ 267 个单元测试
 ├── main.py                         # 统一入口 (16 个命令)
 ├── environment.yml
 └── CLAUDE.md
@@ -186,8 +195,12 @@ python main.py run_all               # 一键全流程
 python main.py export                # 导出 Excel 报告
 python main.py figures               # 生成报告图表
 
+# === DeepBCI 数据 ===
+python datasets/deepbci_loader.py -i data/subjects/sub_001/session_xxx   # 单会话
+python datasets/deepbci_loader.py --all                                  # 所有会话
+
 # === 质量 ===
-pytest tests/ -v                     # 131 个测试
+pytest tests/ -v                     # 267 个测试
 black . && ruff check .              # 格式化 + Lint
 ```
 
@@ -234,6 +247,24 @@ Input (B, 1, C, T)
 1. **时空注意力深度融合** — 在 EEGNet 的 Block1/Block2 之间插入，比独立注意力模块更有效
 2. **空闲状态置信度门控** — 在线推理时自动过滤低置信度和 IDLE 预测，防止误触发
 3. **少样本在线校准** — LOSO + Few-shot FT，用目标被试 5 个 trial 即可提升 ~3pp
+
+### 扩展模型库 (Sprint 1.5)
+
+| 模型 | 论文 | 特点 |
+|------|------|------|
+| `EEGConformer` | Song et al. 2023 | CNN 骨干 + Transformer Encoder，小样本 MI 优化 |
+| `EEGTCNet` | Ingolfsson et al. 2020 | EEGNet Block1 + TCN 时序卷积，适合嵌入式部署 |
+| `FBCNet` | Bakshi et al. 2021 | 多频段滤波 + 逐频段空间卷积 + 方差池化 |
+| `MixStyle` | Zhou et al. (ICLR 2021) | 特征统计混合域泛化，无需域标签 |
+
+### 域泛化与自适应
+
+| 技术 | 来源 | 说明 |
+|------|------|------|
+| **Euclidean Alignment (EA)** | He & Wu 2018 | 跨被试协方差对齐，无监督，计算轻量 |
+| **Center Loss** | Wen et al. 2016 | 同类特征向中心收缩，隐式减少被试间散度 |
+| **MMD Loss** | Gretton et al. 2012 | 多核 RBF 最大均值差异，显式对齐特征分布 |
+| **MixStyle** | Zhou et al. 2021 | 实例级均值/方差混合，模拟域偏移 |
 
 ---
 

@@ -6,6 +6,7 @@ Connects stream → buffer → model → action output.
 Supports idle-state confidence gating to prevent false triggers
 during online demonstrations.  See MIInference.predict_with_gating().
 """
+import collections
 import numpy as np
 import torch
 
@@ -212,3 +213,136 @@ class MIInference:
             action = self.action_map.get(class_id, "STOP")
 
         return action, class_id, confidence
+
+
+# ---------------------------------------------------------------------------
+# Online gating: sliding-window voting + cooldown
+# ---------------------------------------------------------------------------
+
+class OnlineGating:
+    """Sliding-window majority voting + cooldown for asynchronous MI-BCI.
+
+    Rather than reacting to every single prediction window, this maintains
+    a history of recent predictions and applies three safety rules:
+
+    1. **Majority voting** — the most common action in the last *N* frames wins.
+    2. **Min-agree** — the majority action must appear in at least
+       ``min_agree`` consecutive frames before it is emitted.
+    3. **Cooldown** — after a non-STOP action is emitted, no new non-STOP
+       action may be emitted for ``cooldown_s`` seconds.
+
+    Parameters
+    ----------
+    window_size : int
+        Number of recent frames to consider for majority voting.
+    min_agree : int
+        Minimum consecutive frames the majority action must hold.
+    cooldown_s : float
+        Minimum time (seconds) between non-STOP action outputs.
+    predict_interval : float
+        Time (seconds) between successive predictions (1 / inference Hz).
+    """
+
+    def __init__(
+        self,
+        window_size: int = 10,
+        min_agree: int = 5,
+        cooldown_s: float = 1.0,
+        predict_interval: float = 0.125,
+    ) -> None:
+        self.window_size = window_size
+        self.min_agree = min_agree
+        self.cooldown_s = cooldown_s
+        self.predict_interval = predict_interval
+        self.cooldown_frames = max(1, int(cooldown_s / predict_interval))
+
+        self._history: collections.deque = collections.deque(maxlen=window_size)
+        self._consecutive: int = 0
+        self._last_action: str | None = None
+        self._frames_since_action: int = self.cooldown_frames
+        self._current_majority: str = "STOP"
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def update(self, class_id: int, action_map: dict[int, str]) -> str:
+        """Push a new prediction frame and return the gated action.
+
+        Parameters
+        ----------
+        class_id : int
+            Raw predicted class from the model.
+        action_map : dict[int, str]
+            Mapping from class_id to action name.
+
+        Returns
+        -------
+        action : str
+            Gated action (always a valid key from *action_map* or ``"STOP"``).
+        """
+        action = action_map.get(class_id, "STOP")
+        self._history.append(action)
+
+        # Not enough history yet — output STOP
+        if len(self._history) < self.window_size:
+            self._frames_since_action += 1
+            return "STOP"
+
+        # Count votes
+        votes = collections.Counter(self._history)
+        majority, count = votes.most_common(1)[0]
+
+        # Track consecutiveness
+        if majority == self._current_majority:
+            self._consecutive += 1
+        else:
+            self._current_majority = majority
+            self._consecutive = 1
+
+        self._frames_since_action += 1
+
+        # ── Decision ──────────────────────────────────────────────
+        if majority == "STOP":
+            return "STOP"
+
+        # Non-STOP majority must hold for min_agree consecutive frames
+        if self._consecutive < self.min_agree:
+            return "STOP"
+
+        # Cooldown check
+        if self._frames_since_action < self.cooldown_frames:
+            return "STOP"
+
+        # Emit action and reset cooldown
+        self._frames_since_action = 0
+        self._last_action = majority
+        return majority
+
+    def reset(self) -> None:
+        """Clear history and reset all state."""
+        self._history.clear()
+        self._consecutive = 0
+        self._last_action = None
+        self._frames_since_action = self.cooldown_frames
+        self._current_majority = "STOP"
+
+    # ------------------------------------------------------------------
+    # Introspection
+    # ------------------------------------------------------------------
+
+    @property
+    def is_warm(self) -> bool:
+        """Whether the history buffer has been filled at least once."""
+        return len(self._history) >= self.window_size
+
+    @property
+    def last_action(self) -> str | None:
+        """The most recently emitted non-STOP action, or None."""
+        return self._last_action
+
+    def __repr__(self) -> str:
+        return (
+            f"OnlineGating(win={self.window_size}, agree={self.min_agree}, "
+            f"cooldown={self.cooldown_s}s, warm={self.is_warm})"
+        )

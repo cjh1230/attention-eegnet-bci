@@ -215,3 +215,78 @@ class TestMIInference:
         assert infer.device == "cpu"
         class_id, _ = infer.predict()
         assert class_id in {0, 1}
+
+
+# ---------------------------------------------------------------------------
+# OnlineGating tests
+# ---------------------------------------------------------------------------
+
+from realtime.inference import OnlineGating
+
+_ACTION_MAP = {0: "STOP", 1: "LEFT", 2: "RIGHT"}
+
+
+class TestOnlineGating:
+    """Tests for sliding-window majority voting + cooldown."""
+
+    def test_outputs_stop_when_cold(self):
+        gating = OnlineGating(window_size=3, min_agree=2, cooldown_s=1.0)
+        assert gating.update(1, _ACTION_MAP) == "STOP"
+        assert not gating.is_warm
+
+    def test_warm_after_window(self):
+        gating = OnlineGating(window_size=3, min_agree=2, cooldown_s=1.0)
+        for _ in range(5):
+            gating.update(1, _ACTION_MAP)
+        assert gating.is_warm
+
+    def test_majority_left_after_consecutive(self):
+        gating = OnlineGating(window_size=5, min_agree=3, cooldown_s=0)
+        # Fill with LEFT
+        for _ in range(10):
+            gating.update(1, _ACTION_MAP)
+        # Should emit LEFT after min_agree consecutive
+        result = gating.update(1, _ACTION_MAP)
+        assert result == "LEFT"
+
+    def test_stop_majority_always_stop(self):
+        gating = OnlineGating(window_size=5, min_agree=3, cooldown_s=0)
+        # Mix: mostly STOP with occasional LEFT
+        for _ in range(5):
+            gating.update(0, _ACTION_MAP)
+        # One LEFT shouldn't override STOP majority
+        result = gating.update(1, _ACTION_MAP)
+        assert result == "STOP"
+
+    def test_cooldown_blocks_actions(self):
+        gating = OnlineGating(window_size=5, min_agree=3, cooldown_s=0.5,
+                              predict_interval=0.125)
+        # Flood LEFT → emit → cooldown active for ~4 frames
+        for _ in range(12):
+            gating.update(1, _ACTION_MAP)
+        # Very next frame after an emit MUST be STOP
+        assert gating.update(1, _ACTION_MAP) == "STOP"
+
+    def test_min_agree_not_met(self):
+        gating = OnlineGating(window_size=10, min_agree=8, cooldown_s=0)
+        # Alternating LEFT/RIGHT → no single action holds long enough
+        for i in range(15):
+            gating.update(1 if i % 2 == 0 else 2, _ACTION_MAP)
+        # Never should emit non-STOP
+        for _ in range(3):
+            assert gating.update(1, _ACTION_MAP) == "STOP"
+            assert gating.update(2, _ACTION_MAP) == "STOP"
+
+    def test_reset(self):
+        gating = OnlineGating(window_size=5, min_agree=3, cooldown_s=0)
+        for _ in range(10):
+            gating.update(1, _ACTION_MAP)
+        gating.reset()
+        assert not gating.is_warm
+        assert gating.last_action is None
+        assert gating.update(1, _ACTION_MAP) == "STOP"
+
+    def test_repr(self):
+        gating = OnlineGating(window_size=7, min_agree=3)
+        assert "win=7" in repr(gating)
+        assert "warm=False" in repr(gating)

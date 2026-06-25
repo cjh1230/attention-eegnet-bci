@@ -12,11 +12,14 @@ dependencies:
   - matplotlib>=3.7
   - pytorch>=2.1
   - torchvision>=0.16
+  - optuna>=3.5
+  - openpyxl>=3.1
   - streamlit>=1.28
   - plotly>=5.17
   - pytest>=7.4
   - black>=23.0
   - pip:
       - mne>=1.6
+      - moabb>=1.5
       - pylsl>=1.16
       - ruff>=0.1

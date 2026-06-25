@@ -43,6 +43,12 @@ FREQ_BANDS = {
     "beta": (13, 30),
     "full": (8, 30),
 }
+
+# Standard FBCSP filter bank (Ang et al. 2008): 4 Hz non-overlapping bands
+FBCSP_BANDS = [
+    (4, 8), (8, 12), (12, 16), (16, 20), (20, 24),
+    (24, 28), (28, 32), (32, 36), (36, 40),
+]
 EVENT_IDS = {
     "rest": 0,
     "left_hand": 1,

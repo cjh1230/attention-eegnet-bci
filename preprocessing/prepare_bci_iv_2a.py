@@ -30,6 +30,7 @@ import sys
 
 sys.path.insert(0, str(ROOT))
 
+from preprocessing.alignment import EuclideanAlignment
 from utils.config import MOTOR_CHANNELS_BCI4
 
 # ── BCI IV 2a EEG channel order (from BNCI2014_001 specification) ──
@@ -54,6 +55,7 @@ def prepare_bci_iv_2a(
     output_path: str | Path = "data/bci_iv_2a_processed",
     n_subjects: int = N_SUBJECTS,
     trials_per_subject: int = TRIALS_PER_SUBJECT,
+    align: bool = False,
 ) -> None:
     """
     Load combined X.npy/y.npy, select 8 motor channels, save per-subject.
@@ -68,6 +70,9 @@ def prepare_bci_iv_2a(
         Number of subjects (default 9).
     trials_per_subject : int
         Trials per subject (default 576).
+    align : bool
+        If True, apply Euclidean Alignment globally before per-subject split.
+        For LOSO, prefer using --align in train_loso.py instead (per-fold EA).
     """
     input_path = Path(input_path)
     output_path = Path(output_path)
@@ -87,6 +92,12 @@ def prepare_bci_iv_2a(
     X = X[:, MOTOR_CHANNEL_INDICES, :]
     print(f"Selected {len(MOTOR_CHANNEL_INDICES)} motor channels: {MOTOR_CHANNELS_BCI4}")
     print(f"Data: X={X.shape}, y={y.shape}, labels={np.unique(y)}")
+
+    # Euclidean Alignment — global (across all subjects)
+    if align:
+        ea = EuclideanAlignment()
+        X = ea.fit_transform([X])[0]
+        print(f"EA aligned: X={X.shape}")
 
     # Split into per-subject blocks and save
     output_path.mkdir(parents=True, exist_ok=True)
@@ -120,8 +131,12 @@ def main():
         "--output", default="data/bci_iv_2a_processed",
         help="Output directory for per-subject files",
     )
+    parser.add_argument("--align", action="store_true",
+                        help="Apply Euclidean Alignment globally before per-subject split")
     args = parser.parse_args()
-    prepare_bci_iv_2a(input_path=args.input, output_path=args.output)
+    prepare_bci_iv_2a(
+        input_path=args.input, output_path=args.output, align=args.align,
+    )
 
 
 if __name__ == "__main__":
