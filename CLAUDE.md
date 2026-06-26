@@ -217,6 +217,7 @@ python utils/report_excel.py --input results.json      # From JSON results
   - PhysioNet names: `Fc3. C3.. Cz.. C4.. Fc4. Cp3. Cpz. Cp4.`
   - BCI IV 2a names: `FC3 C3 Cz C4 FC4 CP3 CPz CP4`
 - **Bands**: mu (8–13 Hz), beta (13–30 Hz), full (8–30 Hz)
+- **FBCSP_BANDS**: 6 sub-bands within 8–30 Hz: `[(8,12), (12,16), (16,20), (20,24), (24,28), (28,30)]`
 - **Config**: Edit `utils/config.py` to change channels/montage
 - **Immutability**: prefer new arrays over in-place mutation
 - **Format/lint**: `black . && ruff check .`
@@ -284,25 +285,41 @@ from models.eegnet_attn import create_model
 model = create_model("eegnet", n_channels=8, n_classes=3)
 model = create_model("eegnet_spatiotemporal", n_channels=8, n_classes=3)
 model = create_model("eegnet_mhsa", n_channels=8, n_classes=3)
+model = create_model("fbcnet", n_channels=8, n_classes=3)
+model = create_model("eeg_tcnet", n_channels=8, n_classes=3)
+model = create_model("eeg_conformer", n_channels=8, n_classes=3)
+model = create_model("fb_maa_eegnet", n_channels=8, n_classes=3)
+model = create_model("maa_eegnet", n_channels=8, n_classes=3)
+model = create_model("maa_eegnet_pre", n_channels=8, n_classes=3)
 ```
 
-### New model architectures (Sprint 1.5)
+### New model architectures (Sprint 2)
 
 ```python
 from models.eeg_conformer import EEGConformer
 from models.eeg_tcnet import EEGTCNet
 from models.fbcnet import FBCNet, apply_filter_bank
 from models.mixstyle import MixStyle1d, MixStyle2d
+from models.motor_area_attention import MotorAreaAttention
+from models.fb_maa_eegnet import FBMAAEEGNet
+from models.maa_eegnet import MAAEEGNet
+from models.maa_eegnet_pre import MAAEEGNetPre
 
-# EEG Conformer: CNN backbone + Transformer encoder
-model = EEGConformer(n_channels=8, n_classes=3, d_model=64, n_heads=4, n_layers=2)
+# EEG Conformer: CNN backbone + Transformer encoder (best overall: 63.93%)
+model = EEGConformer(n_channels=8, n_classes=2, d_model=64, n_heads=4, n_layers=2)
 
-# EEG-TCNet: EEGNet Block1 + TCN (temporal conv net)
-model = EEGTCNet(n_channels=8, n_classes=3, F1=8, D=2, kernel_size=16)
+# EEG-TCNet: EEGNet Block1 + TCN (temporal conv net, 63.41%)
+model = EEGTCNet(n_channels=8, n_classes=2, F1=8, D=2, kernel_size=16)
 
-# FBCNet: Filter-bank CNN (requires multi-band input)
+# FBCNet: Filter-bank CNN (requires multi-band input, 61.11% + EA)
 X_bands = apply_filter_bank(X, fs=250)  # (N, C, T) → (N, n_bands, C, T)
-model = FBCNet(n_bands=9, n_channels=8, n_classes=3)
+model = FBCNet(n_bands=6, n_channels=8, n_classes=2)
+
+# MAA modules: Motor-Area Attention for 8ch motor-cortex EEG
+maa = MotorAreaAttention(n_channels=8)               # region-based channel weighting
+model = MAAEEGNet(n_channels=8, n_classes=2)         # MAA after temporal conv
+model = MAAEEGNetPre(n_channels=8, n_classes=2)      # MAA before temporal conv (raw EEG)
+model = FBMAAEEGNet(n_bands=6, n_channels=8, n_classes=2)  # Filter Bank + MAA + EEGNet
 
 # MixStyle: domain generalization via feature-statistics mixing
 self.mixstyle = MixStyle2d(p=0.5, alpha=0.1)  # insert after BN/activation
@@ -348,66 +365,89 @@ MOTOR_CHANNELS_BCI4 = [
 
 ## Current Results
 
-### PhysioNet MI (30 subjects, 8ch, binary LOSO)
+### PhysioNet MI (30 subjects, 8ch, binary LOSO, 80 epochs)
 
-| Method | Type | LOSO Accuracy | Kappa |
-|-------|------|--------------|-------|
-| EEGNet (base) | DL | 51.93% ± 7.20% | 0.033 |
-| EEGNet + Few-shot FT (5 trials) | DL | 54.95% ± 8.04% | 0.099 |
-| EEGNet + SpatiotemporalAttn | DL | 55.04% ± 7.86% | 0.096 |
-| MDM + EA | Riemannian | 56.30% ± 10.94% | 0.129 |
-| FgMDM + EA | Riemannian | 60.00% ± 9.04% | 0.198 |
-| **Tangent Space + LDA + EA** | **Riemannian** | **60.30%** ± 9.75% | **0.208** |
+| Rank | Method | Type | Accuracy | Kappa |
+|------|-------|------|----------|-------|
+| 1 | **EEG Conformer + EA** | DL + Transformer | **63.93%** ± 9.58% | 0.277 |
+| 2 | **EEG-TCNet + EA** | DL + TCN | **63.41%** ± 10.51% | 0.265 |
+| 3 | **FBCNet + EA** | DL + Filter Bank | **61.11%** ± 11.69% | 0.219 |
+| 4 | Tangent Space + LDA + EA | Riemannian | 60.44% ± 9.64% | 0.212 |
+| 5 | FgMDM + EA (6-band, 8–30Hz) | Riemannian | 59.18% ± 8.12% | 0.180 |
+| 6 | EEGNet + EA | DL | 58.00% ± 10.06% | 0.161 |
+| 7 | EEGNet + SpatiotemporalAttn + EA | DL + Attention | 57.78% ± 8.55% | 0.158 |
+| 8 | MDM + EA | Riemannian | 56.22% ± 10.52% | 0.127 |
+| 9 | FB-MAA-EEGNet + EA | DL + FB + MAA | 53.78% ± 7.68% | 0.070 |
+| 10 | EEGNet (no EA) | DL | 51.93% ± 7.20% | 0.033 |
+| 11 | FBCNet (no EA) | DL + Filter Bank | 49.70% ± 2.66% | -0.010 |
+
+> Key insight: DL models can beat Riemannian baselines. EEG Conformer + EA (63.93%) and EEG-TCNet + EA (63.41%) both surpass Tangent Space + LDA + EA (60.44%). EA is the single strongest regularizer: +3–11pp across all DL models. Temporal modeling (Transformer/TCN) is the most impactful architectural choice. Fixed-group Motor-Area Attention (MAA) degrades performance in all variants.
+
+### EA Gain Analysis
+
+| Model | no EA | + EA | Δ |
+|-------|-------|------|-----|
+| EEGNet | 51.93% | 58.00% | +6.07pp |
+| EEGNet + SpatiotemporalAttn | 55.04% | 57.78% | +2.74pp |
+| FBCNet | 49.70% | 61.11% | +11.41pp |
+| Tangent Space | 60.44% | 60.44% | ±0.00pp (affine-invariant) |
+
+### Riemannian Cov Estimator & Metric Sweep
+
+| cov_estimator | Acc | metric | Acc |
+|---------------|-----|--------|-----|
+| scm (sample) | 60.44% | riemann | 60.44% |
+| lwf (Ledoit-Wolf) | 60.30% | wasserstein | 60.44% |
+| oas (Oracle) | 60.23% | logeuclid | 59.70% |
+| mcd (robust) | — | logchol | 59.25% |
 
 ### BCI Competition IV 2a (9 subjects, 8ch, 4-class LOSO)
 
-| Method | Type | LOSO Accuracy | Kappa |
-|-------|------|--------------|-------|
-| MDM + EA | Riemannian | 33.43% ± 10.92% | 0.112 |
-| FgMDM + EA | Riemannian | 34.91% ± 8.48% | 0.132 |
-| EEGNet + SpatiotemporalAttn | DL | 36.94% ± 11.78% | 0.159 |
+| Method | Type | Accuracy | Kappa |
+|-------|------|----------|-------|
+| **EEGNet (base)** | DL | **39.47%** ± 12.45% | 0.193 |
 | Tangent Space + LDA + EA | Riemannian | 38.60% ± 12.44% | 0.181 |
-| **EEGNet (base)** | **DL** | **39.47%** ± 12.45% | **0.193** |
-
-> Key insight: Riemannian dominates DL by +8pp on binary, but EEGNet edges ahead on 4-class. The setting ceiling is ~60%, not ~55%.
+| EEGNet + SpatiotemporalAttn | DL | 36.94% ± 11.78% | 0.159 |
+| FgMDM + EA | Riemannian | 34.91% ± 8.48% | 0.132 |
+| MDM + EA | Riemannian | 33.43% ± 10.92% | 0.112 |
 
 ## References
 
 - `XH-202610_基于运动想象的脑－机交互算法研究.pdf` — Project proposal
 - EEGNet: Lawhern et al. 2018 (https://doi.org/10.1088/1741-2552/aace8c)
+- EEG Conformer: Song et al. 2023 (arXiv:2301.05578)
+- EEG-TCNet: Ingolfsson et al. 2020 (IEEE SMC)
+- FBCNet: Bakshi et al. 2021 (arXiv:2104.01233)
 - MNE-Python: https://mne.tools
 - MOABB: https://github.com/NeuroTechX/moabb
+- pyriemann: https://github.com/pyRiemann/pyRiemann
 - LSL: https://labstreaminglayer.org
 
 ## Current Sprint
 
-**Sprint 1.5** (June 2026): Model zoo + domain generalization + code review.
+**Sprint 2** (June 2026): Traditional-driven neural network design + full experiment sweep.
 
-- [x] Repo structure + skeleton modules
-- [x] MNE preprocessing (PhysioNet MI, 30 subjects)
-- [x] EEGNet model with lazy classifier
-- [x] Channel attention (SE, MHSA, Temporal, Spatiotemporal)
-- [x] EEGNet + attention deep integration (5 variants)
-- [x] Training scripts (baseline, EEGNet, ablation, sweep)
-- [x] Data augmentation pipeline
-- [x] Real-time pipeline (dummy + LSL scaffold)
-- [x] Streamlit dashboard (model loading, CSV export)
-- [x] 8-channel adaptation (hardware-aligned montage)
-- [x] BCI Competition IV 2a dataset (downloaded)
-- [x] Unit test suite (267 tests)
-- [x] Excel validation report generator
-- [x] CSP baseline: 38.6% (3-class, 8ch)
-- [x] EEGNet: 57.6% (3-class, 8ch), 63.0% (2-class, 8ch)
-- [x] LOSO evaluation (PhysioNet MI binary: EEGNet 51.93%, Spatiotemporal 55.04%, FT5 54.95%)
-- [x] EEGSource Protocol + FileReplaySource + demo --source replay + idle gating
-- [x] DeepBCI recorder session subdirectories + metadata fields
-- [x] BCI IV 2a preprocessing (8ch motor selection, per-subject split)
-- [x] DeepBCISource placeholder (EEGSource protocol, raises NotImplementedError)
-- [x] BCI IV 2a LOSO (4-class: EEGNet 39.47%, Spatiotemporal 36.94%; chance=25%)
-- [x] Dashboard File Replay integration (Synthetic + File Replay, dynamic n_classes)
-- [x] Multi-subject batch demo (--all-subjects)
-- [x] Action map fix (binary/4-class gating, auto-idle detection)
-- [x] FBCSP feature extraction (Filter Bank CSP + LDA/SVM)
+- [x] FBCSP_BANDS corrected: 9-band 4–40Hz → 6-band 8–30Hz (aligned with preprocessing)
+- [x] Riemannian sweep: cov estimator (scm/lwf/oas/mcd) + metric (riemann/logeuclid/logchol/wasserstein)
+- [x] DL baselines with EA: EEGNet (58.00%), FBCNet (61.11%), EEG-TCNet (63.41%), EEG Conformer (63.93%)
+- [x] FB-MAA-EEGNet implementation (Filter Bank + Motor-Area Attention + EEGNet)
+- [x] MAA-EEGNet (3 variants: post-temporal, pre-temporal, with filter bank)
+- [x] MAA ablation: fixed-group attention degrades performance (−2~4pp vs EEGNet baseline)
+- [x] EA gain analysis: +3~11pp across all DL models; FBCNet benefits most (+11.41pp)
+- [x] Time window sweep script (--tmin/--tmax CLI args + orchestrator)
+- [x] 10-config full ablation script
+- [x] Test suite: 304 → 335 tests (31 new: MAA + FB-MAA-EEGNet)
+- [x] README v2 with full results, EA gain table, model comparison
+
+**Key findings:**
+- EEG Conformer + EA is the new SOTA at 63.93% (vs Riemannian 60.44%)
+- Temporal modeling (Transformer/TCN) > spatial attention for 8ch MI
+- EA is the single most impactful technique for DL
+- scm covariance is optimal; shrinkage doesn't help 8ch
+- Fixed-group MAA needs redesign (learnable grouping, multi-head, or gating-based)
+
+### Sprint 1.5 (completed): Model zoo + domain generalization + code review.
+
 - [x] EEG Conformer model (CNN + Transformer for MI-EEG)
 - [x] EEG-TCNet model (CNN + TCN for embedded deployment)
 - [x] FBCNet model (Filter-Bank CNN with variance pooling)
@@ -418,5 +458,10 @@ MOTOR_CHANNELS_BCI4 = [
 - [x] Full code review + bug fixes across all modules
 - [x] Test suite expanded (131 → 304 tests)
 - [x] Riemannian Geometry baseline (Tangent Space / MDM / FgMDM) — 60.30% binary LOSO
-- [ ] Hyperparameter sweep (ready, needs GPU time)
+
+### Backlog
+- [ ] Hyperparameter sweep for top models (Conformer/TCNet)
+- [ ] Few-shot calibration sweep on best models
+- [ ] Time window sweep (full run — script ready, needs compute)
 - [ ] Real-time LSL integration test with DeepBCI hardware
+- [ ] MAA redesign: learnable grouping or gated attention
