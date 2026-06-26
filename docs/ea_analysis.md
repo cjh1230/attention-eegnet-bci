@@ -2,7 +2,9 @@
 
 > **核心问题**: Euclidean Alignment 为什么对不同深度模型的提升幅度差异巨大？
 
-## 完整 EA 增益表
+> **新发现 (2026-06-26)**: EA 增益并非纯架构属性 — 它受到数据集被试间变异性的显著调节。
+
+## PhysioNet MI 完整 EA 增益表
 
 | 模型 | 无 EA | + EA | 增益 | 内部归一化机制 |
 |------|-------|------|------|---------------|
@@ -149,6 +151,62 @@ X → Covariance Matrix (SPD) → Tangent Space Projection → LDA
 | 40 | 66.67% |
 
 > Few-shot calibration 带来额外 +2.14pp 提升（10 trials/class），说明少量目标被试数据即可进一步提升在线性能。
+
+---
+
+## 跨数据集验证: BCI Competition IV 2a
+
+> **关键发现**: EA 增益是**数据集相关的**，不是纯架构属性。
+
+### BCI IV 2a (9 subjects, 8ch, 4-class LOSO, 60 epochs)
+
+| 模型 | 无 EA | + EA | 增益 | vs PhysioNet |
+|------|-------|------|------|-------------|
+| EEGNet | 39.85% | 38.31% | **-1.54pp** ⚠️ | +6.07pp（反转！） |
+| EEG-TCNet | 40.33% | 40.78% | +0.45pp | +1.85pp（一致低增益） |
+| EEG-Conformer | 40.07% | 40.12% | +0.05pp | +2.60pp（一致低增益） |
+| FBCNet | ⏳ | ⏳ | — | +11.41pp |
+
+### 双数据集对比
+
+```
+PhysioNet (30 subjects, ~45 trials/subject, binary):
+  EA 增益显著: FBCNet +11.41 > EEGNet +6.07 > Conformer +2.60 > TCNet +1.85 > Tangent ±0
+
+BCI IV 2a (9 subjects, 576 trials/subject, 4-class):
+  EA 增益微小或负: EEGNet -1.54, TCNet +0.45, Conformer +0.05
+```
+
+### 解释: 修正后的 EA 增益模型
+
+原有假设（仅架构维度）:
+```
+EA 增益 = f(内部归一化强度)
+```
+
+修正后的双因素模型:
+```
+EA 增益 = f(架构内部归一化 × 数据集被试间变异性)
+```
+
+| 数据集特征 | PhysioNet MI | BCI IV 2a |
+|-----------|-------------|-----------|
+| 被试数 | **30** | 9 |
+| Trials/被试 | **~45** | 576 |
+| 被试间变异 | **大**（少 trials，高方差） | 小（多 trials，稳定估计） |
+| EA 效果 | **显著**（+2~+11pp） | 微弱（-1.5~+0.5pp） |
+
+**机制**:
+- EA 的核心作用是减少被试间协方差分布差异
+- 当被试间差异本来就大（PhysioNet: 30 被试，每人仅 ~45 trials）→ EA 收益大
+- 当被试间差异较小（BCI IV 2a: 9 被试，每人 576 trials → 协方差估计更稳定）→ EA 边际收益小
+- 4-class 任务本身更难（chance=25% vs PhysioNet 50%），EA 的协方差对齐不足以弥补类别决策边界的复杂度
+
+**对架构设计的启示（更新版）**:
+1. 少被试、少 trial 的场景（如真实 BCI 校准）→ EA 至关重要
+2. 多被试、多 trial 的场景 → 内部归一化（BN/LN）已足够
+3. **EA 对 FBCNet 的 +11pp 增益可能也受 PhysioNet 特定数据特征影响，需在 BCI IV 2a 上验证**
+4. 跨数据集迁移时，不能假设 EA 增益可复现
 
 ---
 
