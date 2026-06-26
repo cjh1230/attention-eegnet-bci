@@ -247,7 +247,8 @@ def main():
                         choices=["eegnet", "eegnet_spatiotemporal",
                                  "fbcnet", "eeg_tcnet",
                                  "eeg_conformer", "fb_maa_eegnet",
-                                 "maa_eegnet", "maa_eegnet_pre"])
+                                 "maa_eegnet", "maa_eegnet_pre",
+                                 "fb_tcnet"])
     parser.add_argument("--finetune", type=int, default=0,
                         help="Few-shot FT trials per class (0 = pure LOSO)")
     parser.add_argument("--finetune_sweep", type=str, default=None,

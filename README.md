@@ -1,6 +1,6 @@
 # 基于运动想象的脑-机交互算法研究
 
-> **XH-202610** · 挑战杯 2026 · `master` [![tests](https://img.shields.io/badge/tests-335%20passed-brightgreen)]()
+> **XH-202610** · 挑战杯 2026 · `master` [![tests](https://img.shields.io/badge/tests-349%20passed-brightgreen)]()
 
 面向 8 通道 DeepBCI 的少通道运动想象 BCI 多方法对比与在线闭环系统。使用 MNE-Python 预处理，对比 EEGNet、EEG Conformer、EEG-TCNet、FBCNet 等深度模型与 Riemannian Geometry 传统强基线，构建 8 通道跨被试 MI 识别、消融实验与在线闭环原型。
 
@@ -56,7 +56,19 @@ python main.py demo --source replay --data data/loso_binary/subj_01/X.npy \
 | 14 | EEGNet (no EA) | DL | 51.93% ± 7.20% | 0.033 |
 | 15 | FBCNet (no EA) | DL + Filter Bank | 49.70% ± 2.66% | -0.010 |
 
-> **核心发现**: 深度模型可以超越传统 Riemannian 基线。EEG Conformer + EA（63.93%）和 EEG-TCNet + EA（63.41%）均超过 Tangent Space + LDA + EA（60.44%）。EA 是当前最强正则化，对 DL 模型带来 +3~+11pp 增益。时序建模（Transformer/TCN）是提高性能的关键因素，远超空间注意力。固定分组的 Motor-Area Attention（MAA）在所有变体中均降低性能。
+> **核心发现**: 深度模型可以超越传统 Riemannian 基线。EEG Conformer + EA（63.93%）和 EEG-TCNet + EA（63.41%）均超过 Tangent Space + LDA + EA（60.44%）。EA 增益与架构内部归一化强度负相关：FBCNet（无归一化）+11.41pp → EEGNet（BN）+6.07pp → Conformer/TCNet（LN+残差）+1.8~2.6pp → Tangent（仿射不变）±0pp。详细分析见 [EA × Architecture Interaction Analysis](docs/ea_analysis.md)。
+
+### Few-shot Calibration
+
+| Calibration Trials/Class | EEG-Conformer + EA |
+|--------------------------|-------------------|
+| 0 (pure LOSO) | 65.33% |
+| 5 | 66.38% |
+| 10 | **67.47%** |
+| 20 | 66.38% |
+| 40 | 66.67% |
+
+> 10 trials/class 的少样本校准带来额外 +2.14pp，最终达 67.47%。
 
 ### Riemannian 协方差估计器与度量 Sweep
 
@@ -85,16 +97,20 @@ python main.py demo --source replay --data data/loso_binary/subj_01/X.npy \
 
 ## EA 增益分析（关键发现）
 
-Euclidean Alignment 是当前 8ch LOSO 任务中对 DL 模型最有效的单一技术：
+Euclidean Alignment 是当前 8ch LOSO 任务中最强的单一技术。但其增益**高度依赖架构**：
 
-| 模型 | 无 EA | + EA | 增益 |
-|------|-------|------|------|
-| EEGNet | 51.93% | 58.00% | **+6.07pp** |
-| EEGNet + SpatiotemporalAttn | 55.04% | 57.78% | +2.74pp |
-| FBCNet | 49.70% | 61.11% | **+11.41pp** |
-| Tangent Space | 60.44% | 60.44% | ±0.00pp (仿射不变) |
+| 模型 | 无 EA | + EA | 增益 | 内部归一化 |
+|------|-------|------|------|-----------|
+| FBCNet | 49.70% | 61.11% | **+11.41pp** | ❌ 无 |
+| EEGNet | 51.93% | 58.00% | **+6.07pp** | BatchNorm |
+| SpatiotemporalAttn | 55.04% | 57.78% | +2.74pp | Attention 重加权 |
+| EEG-Conformer | 61.33% | 63.93% | +2.60pp | LayerNorm + 残差 |
+| EEG-TCNet | 61.56% | 63.41% | +1.85pp | BatchNorm + 残差 |
+| Tangent Space | 60.44% | 60.44% | ±0.00pp | 仿射不变 |
 
-> EA 通过在每折 LOSO 内对训练被试计算参考协方差矩阵，将测试被试对齐到训练分布。对 Tangent Space 无影响（切线空间本身仿射不变）；对 FBCNet 增益最大，说明 Filter Bank 处理放大了跨被试协方差差异。
+**机制**: EA 将跨被试 Riemannian 协方差距离减少 **85.1%**。FBCNet 的方差池化层直接读取协方差结构，因此受益最大；TCN/Transformer 的内部归一化（LayerNorm/BatchNorm + 残差）已消除大部分分布偏移，EA 边际增益小。
+
+> 详细分析见 [`docs/ea_analysis.md`](docs/ea_analysis.md) — 包含协方差距离量化、频带方差稳定性、架构设计原则。
 
 ---
 
@@ -299,6 +315,7 @@ black . && ruff check .              # 格式化 + Lint
 | `eeg_conformer` | DL + Transformer | Song et al. 2023 | CNN 骨干 + Transformer Encoder |
 | `eeg_tcnet` | DL + TCN | Ingolfsson et al. 2020 | EEGNet Block1 + 时序卷积网络 |
 | `fbcnet` | DL + Filter Bank | Bakshi et al. 2021 | 多频段 + 逐频段空域卷积 + 方差池化 |
+| `fb_tcnet` | DL + FB + TCN | 本项目 | Filter Bank + TCN 时序建模 + EA |
 | `fb_maa_eegnet` | DL + FB + MAA | 本项目 | Filter Bank + 运动区注意力 + EEGNet |
 | `maa_eegnet` | DL + MAA | 本项目 | MAA (temporal conv 后) + EEGNet |
 | `maa_eegnet_pre` | DL + MAA | 本项目 | MAA (原始 EEG 预处理) + EEGNet |

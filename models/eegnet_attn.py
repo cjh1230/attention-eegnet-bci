@@ -230,6 +230,11 @@ def create_model(
 
         return MAAEEGNetPre(n_channels=n_channels, n_classes=n_classes, **kwargs)
 
+    if model_type == "fb_tcnet":
+        from models.fb_tcnet import FBTCNet
+
+        return FBTCNet(n_channels=n_channels, n_classes=n_classes, **kwargs)
+
     raise ValueError(f"Unknown model_type: {model_type}. "
                      f"Choices: eegnet, fbcnet, eeg_tcnet, "
                      f"eeg_conformer, fb_maa_eegnet, {', '.join(attn_map)}")
