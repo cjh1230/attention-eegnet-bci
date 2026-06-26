@@ -45,10 +45,9 @@ COV_ESTIMATORS = {"scm", "lwf", "oas", "mcd"}
 RIEMANN_METRICS = {"riemann", "euclid", "logchol", "logeuclid", "wasserstein"}
 VALID_METHODS = {"tangent", "mdm", "fgmdm"}
 
-# Default FBCSP-style filter bank (Ang et al. 2008)
+# MI-adapted filter bank: 6 sub-bands within 8–30 Hz (mu + beta rhythms)
 _DEFAULT_BANDS = [
-    (4, 8), (8, 12), (12, 16), (16, 20), (20, 24),
-    (24, 28), (28, 32), (32, 36), (36, 40),
+    (8, 12), (12, 16), (16, 20), (20, 24), (24, 28), (28, 30),
 ]
 
 

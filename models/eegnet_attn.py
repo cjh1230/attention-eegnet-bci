@@ -172,7 +172,8 @@ def create_model(
     ----------
     model_type : str
         "eegnet" | "eegnet_se" | "eegnet_mhsa" | "eegnet_temporal" |
-        "eegnet_spatiotemporal" | "fbcnet" | "eeg_tcnet"
+        "eegnet_spatiotemporal" | "fbcnet" | "eeg_tcnet" |
+        "eeg_conformer" | "fb_maa_eegnet"
     n_channels : int
     n_classes : int
     **kwargs : passed to model constructor
@@ -214,6 +215,21 @@ def create_model(
 
         return EEGConformer(n_channels=n_channels, n_classes=n_classes, **kwargs)
 
+    if model_type == "fb_maa_eegnet":
+        from models.fb_maa_eegnet import FBMAAEEGNet
+
+        return FBMAAEEGNet(n_channels=n_channels, n_classes=n_classes, **kwargs)
+
+    if model_type == "maa_eegnet":
+        from models.maa_eegnet import MAAEEGNet
+
+        return MAAEEGNet(n_channels=n_channels, n_classes=n_classes, **kwargs)
+
+    if model_type == "maa_eegnet_pre":
+        from models.maa_eegnet_pre import MAAEEGNetPre
+
+        return MAAEEGNetPre(n_channels=n_channels, n_classes=n_classes, **kwargs)
+
     raise ValueError(f"Unknown model_type: {model_type}. "
                      f"Choices: eegnet, fbcnet, eeg_tcnet, "
-                     f"eeg_conformer, {', '.join(attn_map)}")
+                     f"eeg_conformer, fb_maa_eegnet, {', '.join(attn_map)}")

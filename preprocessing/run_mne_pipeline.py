@@ -131,8 +131,13 @@ def process_subject(
     fp: Path,
     channel_picks: list[str] | None = None,
     dataset: str = "auto",
+    tmin: float | None = None,
+    tmax: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray] | None:
     """Process one subject file and return (X, y) arrays with canonical labels."""
+    _tmin = tmin if tmin is not None else T_MIN
+    _tmax = tmax if tmax is not None else T_MAX
+
     raw = load_and_filter(fp)
 
     # Select specific channels if requested
@@ -158,7 +163,7 @@ def process_subject(
     epochs = mne.Epochs(
         raw, events_remapped,
         event_id={str(k): int(k) for k in unique_ev},
-        tmin=T_MIN, tmax=T_MAX,
+        tmin=_tmin, tmax=_tmax,
         baseline=None,
         preload=True, verbose=False,
     )
@@ -167,7 +172,7 @@ def process_subject(
     y = epochs.events[:, -1].astype(np.int64)
 
     # Optionally downsample time dim
-    n_times_target = int((T_MAX - T_MIN) * SFREQ)
+    n_times_target = int((_tmax - _tmin) * SFREQ)
     if X.shape[2] > n_times_target:
         X = X[:, :, :n_times_target]
 
@@ -193,6 +198,10 @@ def main():
                         help="Apply Euclidean Alignment (EA). "
                              "With --per_subject: per-subject self-alignment. "
                              "Without: global alignment across all subjects.")
+    parser.add_argument("--tmin", type=float, default=None,
+                        help="Epoch start time in seconds (default: config T_MIN=%.1f)" % T_MIN)
+    parser.add_argument("--tmax", type=float, default=None,
+                        help="Epoch end time in seconds (default: config T_MAX=%.1f)" % T_MAX)
     args = parser.parse_args()
 
     # Resolve channel picks
@@ -214,7 +223,8 @@ def main():
 
     for i, fp in enumerate(files):
         print(f"\n[{i+1}/{len(files)}] {fp.parent.name}/{fp.name}")
-        result = process_subject(fp, channel_picks, dataset=args.dataset)
+        result = process_subject(fp, channel_picks, dataset=args.dataset,
+                                 tmin=args.tmin, tmax=args.tmax)
         if result is None:
             continue
         X, y = result

@@ -71,7 +71,7 @@ class FBCNet(nn.Module):
     Parameters
     ----------
     n_bands : int
-        Number of frequency bands in the input (default 9).
+        Number of frequency bands in the input (default 6 for 8–30 Hz sub-bands).
     n_channels : int
         Number of EEG channels.
     n_classes : int
@@ -91,7 +91,7 @@ class FBCNet(nn.Module):
 
     def __init__(
         self,
-        n_bands: int = 9,
+        n_bands: int = 6,
         n_channels: int = 8,
         n_classes: int = 3,
         m: int = 32,

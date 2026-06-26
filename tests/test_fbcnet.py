@@ -49,7 +49,7 @@ class TestApplyFilterBank:
         """Should work with default FBCSP_BANDS from config."""
         X = rng.randn(5, 8, 200).astype(np.float32)
         X_mb = apply_filter_bank(X)
-        assert X_mb.shape[1] == 9  # FBCSP_BANDS has 9 bands
+        assert X_mb.shape[1] == 6  # FBCSP_BANDS has 6 bands (8–30 Hz)
 
 
 # ---------------------------------------------------------------------------
@@ -61,7 +61,7 @@ class TestFBCNetInit:
 
     def test_default_constructor(self):
         model = FBCNet()
-        assert model.n_bands == 9
+        assert model.n_bands == 6
         assert model.n_channels == 8
         assert model.n_classes == 3
         assert model.m == 32
