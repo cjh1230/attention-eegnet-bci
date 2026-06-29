@@ -38,11 +38,13 @@ sys.path.insert(0, str(ROOT))
 
 from features.spd_covariance import (
     compute_covariance,
+    compute_covariance_shrinkage,
     compute_multiband_covariance,
     paired_spd_augment,
     mask_covariance_channels,
+    batch_geodesic_mixup,
 )
-from models.spd_models import create_spdnet, MultiBandSPDNet, SPDDecoder
+from models.spd_models import create_spdnet, MultiBandSPDNet, SPDDecoder, ProtoSPDNet, proto_loss
 from preprocessing.alignment import EuclideanAlignment
 from utils.metrics import (
     classification_report,
@@ -90,6 +92,8 @@ def _train_spdnet(
     lr: float = 1e-3,
     weight_decay: float = 1e-4,
     patience: int = 30,
+    proto_lambda: float = 0.0,
+    mixup_alpha: float = 0.0,
     verbose: bool = True,
 ) -> nn.Module:
     """Train SPDNet on pre-computed covariance matrices.
@@ -105,6 +109,7 @@ def _train_spdnet(
     lr : float
     weight_decay : float
     patience : int  Early-stopping patience (0 = no early stopping).
+    proto_lambda : float  Prototype regularization weight.
     verbose : bool
 
     Returns
@@ -162,8 +167,27 @@ def _train_spdnet(
         total_loss = 0.0
         for Xb, yb in tr_loader:
             Xb, yb = Xb.to(device), yb.to(device)
+
+            # Geodesic mixup (on SPD manifold)
+            if mixup_alpha > 0:
+                Xb_np = Xb.cpu().numpy()
+                yb_np = yb.cpu().numpy()
+                Xb_mixed, yb_soft = batch_geodesic_mixup(Xb_np, yb_np, alpha=mixup_alpha)
+                Xb = torch.from_numpy(Xb_mixed).float().to(device)
+                yb_soft_t = torch.from_numpy(yb_soft).float().to(device)
+
             optimizer.zero_grad()
-            loss = criterion(model(Xb), yb)
+            if hasattr(model, 'prototypes'):
+                logits, feats = model(Xb, return_features=True)
+                ce_loss = criterion(logits, yb)
+                p_loss = proto_loss(feats, yb, model.prototypes, model.proto_temp)
+                loss = ce_loss + proto_lambda * p_loss
+            elif mixup_alpha > 0:
+                logits = model(Xb)
+                # Soft cross-entropy for mixup
+                loss = -(yb_soft_t * torch.nn.functional.log_softmax(logits, dim=-1)).sum(-1).mean()
+            else:
+                loss = criterion(model(Xb), yb)
             loss.backward()
             optimizer.step()
             total_loss += loss.item() * Xb.size(0)
@@ -314,7 +338,13 @@ def _train_spdnet_mb(
                   for k, v in C_tr.items()}
             yb = torch.from_numpy(y_tr[batch_idx]).long().to(device)
             optimizer.zero_grad()
-            loss = criterion(model(Xb), yb)
+            if hasattr(model, 'prototypes'):
+                logits, feats = model(Xb, return_features=True)
+                ce_loss = criterion(logits, yb)
+                p_loss = proto_loss(feats, yb, model.prototypes, model.proto_temp)
+                loss = ce_loss + proto_lambda * p_loss
+            else:
+                loss = criterion(model(Xb), yb)
             loss.backward()
             optimizer.step()
             total_loss += loss.item() * len(batch_idx)
@@ -652,6 +682,22 @@ def main():
         help="Learning rate for pre-training (default: 1e-3)",
     )
     parser.add_argument(
+        "--proto_lambda", type=float, default=0.0,
+        help="Prototype regularization weight (0=disabled, default: 0)",
+    )
+    parser.add_argument(
+        "--proto_temp", type=float, default=0.1,
+        help="Temperature for prototype loss (default: 0.1)",
+    )
+    parser.add_argument(
+        "--mixup_alpha", type=float, default=0.0,
+        help="Geodesic mixup alpha (0=disabled, 0.5=default)",
+    )
+    parser.add_argument(
+        "--cov_shrinkage", action="store_true",
+        help="Use OAS shrinkage covariance instead of SCM",
+    )
+    parser.add_argument(
         "--few_shot", type=int, default=0,
         help="Few-shot LOSO: use only k trials per class from training subjects (0=disabled)",
     )
@@ -737,7 +783,6 @@ def main():
         y_test = test_subj["y"]
 
         if args.multi_band:
-            # Multi-band: mu (8-13Hz) + beta (13-30Hz) sub-band covariance
             C_train = compute_multiband_covariance(
                 X_train_raw, estimator=args.cov_estimator, reg=args.reg, fs=250,
             )
@@ -747,6 +792,10 @@ def main():
             n_bands = len(C_train)
             print(f"  Bands: {list(C_train.keys())}  "
                   f"shapes: {[v.shape for v in C_train.values()]}")
+        elif args.cov_shrinkage:
+            C_train = compute_covariance_shrinkage(X_train_raw, alpha=None, reg=args.reg)
+            C_test = compute_covariance_shrinkage(X_test_raw, alpha=None, reg=args.reg)
+            print(f"  C_train: {C_train.shape} (OAS)  C_test: {C_test.shape}")
         else:
             C_train = compute_covariance(
                 X_train_raw, estimator=args.cov_estimator, reg=args.reg
@@ -765,6 +814,14 @@ def main():
                 bimap_dims=args.bimap_dims,
                 dropout=args.dropout,
                 share_branches=True,
+            ).to(device)
+        elif args.proto_lambda > 0:
+            model = ProtoSPDNet(
+                n_channels=n_channels,
+                n_classes=n_classes,
+                bimap_dims=args.bimap_dims,
+                dropout=args.dropout,
+                proto_temp=args.proto_temp,
             ).to(device)
         else:
             model = create_spdnet(
@@ -824,6 +881,8 @@ def main():
                 lr=args.lr,
                 weight_decay=args.weight_decay,
                 patience=args.patience,
+                proto_lambda=args.proto_lambda,
+                mixup_alpha=args.mixup_alpha,
                 verbose=True,
             )
 

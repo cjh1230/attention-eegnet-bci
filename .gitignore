@@ -55,6 +55,9 @@ results/
 .DS_Store
 Thumbs.db
 
+# Temp / unpacked artifacts
+temp_template_unpacked/
+
 # Claude Code / Codex (local only)
 CLAUDE.md
 AGENTS.md

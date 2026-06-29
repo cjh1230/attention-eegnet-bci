@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code when working with code in this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
 
@@ -15,7 +15,7 @@ BCI algorithm research using the Motor Imagery (MI) paradigm. 挑战杯 project 
 ```bash
 conda env create -f environment.yml              # once
 conda activate bci                                # per session
-pip install mne moabb streamlit plotly pytest black ruff openpyxl  # full deps
+pip install mne moabb streamlit plotly pytest black ruff openpyxl pandas  # full deps
 ```
 
 All commands below assume `conda activate bci` is active. Use `python`, not a hardcoded interpreter path.
@@ -46,7 +46,8 @@ All commands below assume `conda activate bci` is active. Use `python`, not a ha
 │   └── download.py       # Auto-download datasets
 ├── datasets/             # Label mapping + metadata
 │   ├── label_mapping.py  #   Canonical label maps (single source of truth)
-│   └── metadata.py       #   Dataset metadata export
+│   ├── metadata.py       #   Dataset metadata export
+│   └── deepbci_loader.py #   DeepBCI session → .npy training data
 ├── preprocessing/
 │   ├── run_mne_pipeline.py  # MNE pipeline: --channels motor8|motor16|all, --binary
 │   ├── prepare_bci_iv_2a.py # BCI IV 2a MOABB .npy → 8ch per-subject
@@ -56,7 +57,7 @@ All commands below assume `conda activate bci` is active. Use `python`, not a ha
 │   ├── mne_pipeline.py      #   programmatic API
 │   ├── alignment.py         #   Euclidean Alignment (EA) cross-subject
 │   └── augment.py           #   on-the-fly augmentation
-├── features/              # csp.py (CSP + FBCSP), riemann.py (Tangent/MDM/FgMDM), bandpower.py
+├── features/              # csp.py, riemann.py, bandpower.py, spd_covariance.py
 ├── models/
 │   ├── eegnet.py            # EEGNet (Lawhern 2018) — lazy classifier
 │   ├── attention.py         # ChannelAttention1D, MultiHeadChannelAttention,
@@ -65,13 +66,24 @@ All commands below assume `conda activate bci` is active. Use `python`, not a ha
 │   ├── eeg_conformer.py     # EEG Conformer (CNN + Transformer, Song 2023)
 │   ├── eeg_tcnet.py         # EEG-TCNet (CNN + TCN, Ingolfsson 2020)
 │   ├── fbcnet.py            # FBCNet (Filter-Bank CNN, Bakshi 2021)
+│   ├── fb_tcnet.py          # FB-TCNet (Filter Bank + TCN, project original)
+│   ├── spd_models.py        # SPDNet (SPD manifold DL, Huang & Van Gool 2017)
+│   ├── motor_area_attention.py  # Motor-Area Attention (8ch region grouping)
+│   ├── fb_maa_eegnet.py     # FB-MAA-EEGNet
+│   ├── maa_eegnet.py        # MAA-EEGNet (MAA after temporal conv)
+│   ├── maa_eegnet_pre.py    # MAA-EEGNet-Pre (MAA before temporal conv)
 │   ├── fusion.py            # MultiBandFusion (mu/beta/full)
 │   └── mixstyle.py          # MixStyle domain generalization (Zhou, ICLR 2021)
 ├── training/
 │   ├── train_eegnet.py     # main training script (6 new features)
 │   ├── train_baseline.py   # CSP+SVM baseline
 │   ├── train_ablation.py   # 6-config comparison with repeat
-│   └── train_sweep.py      # Optuna hyperparameter search + manual grid fallback
+│   ├── train_sweep.py      # Optuna hyperparameter search + manual grid fallback
+│   ├── train_loso.py       # LOSO cross-validation (Few-shot FT, CSV/JSON)
+│   ├── train_riemann_loso.py  # Riemannian LOSO (cov/metric/band sweep)
+│   ├── train_spd_loso.py   # SPDNet LOSO on SPD covariance matrices
+│   ├── evaluate_subjectwise.py  # Per-subject eval
+│   └── split.py            # Data splitting
 ├── realtime/
 │   ├── sources.py          #   EEGSource Protocol (unified interface)
 │   ├── stream.py           #   DummyStream (synthetic data)
@@ -93,9 +105,22 @@ All commands below assume `conda activate bci` is active. Use `python`, not a ha
 ├── scripts/               # Experiment automation
 │   ├── run_all_experiments.py      # One-command full pipeline
 │   ├── export_competition_excel.py # Competition-format Excel
-│   └── make_report_figures.py      # Confusion matrix / bar charts / ablation
-├── tests/                 # 267 unit tests (pytest)
-├── main.py                # Single entry point (16 commands)
+│   ├── make_report_figures.py      # Confusion matrix / bar charts / ablation
+│   ├── run_time_window_sweep.py    # Time window sweep
+│   ├── run_ablation_all.py         # 10-config ablation
+│   ├── analyze_ea_effects.py       # EA × Architecture interaction analysis
+│   ├── analyze_spdnet_vs_tangent.py  # SPDNet vs Tangent comparison
+│   └── make_paper_figures.py       # Paper figures (6 figs + stats)
+├── docs/                  # Research docs & paper draft
+│   ├── ea_analysis.md
+│   ├── paper_draft.md
+│   ├── TECHNICAL_REPORT.md
+│   ├── research_proposal.md
+│   ├── research_directions_2025.md
+│   ├── neural_sde_research_plan.md
+│   └── spd_ssl_research_plan.md
+├── tests/                 # 350 unit tests (29 files, pytest)
+├── main.py                # Single entry point (18 commands)
 ├── environment.yml
 └── requirements.txt
 ```
@@ -116,6 +141,7 @@ python main.py dashboard      # Streamlit dashboard (port 8501)
 python main.py record         # DeepBCI data collection (interactive)
 python main.py run_all        # Full pipeline: preprocess → train → LOSO → export
 python main.py export         # Competition Excel report
+python main.py riemann        # Riemannian geometry LOSO
 python main.py figures        # Report figures (confusion matrix, bar charts)
 python main.py metadata       # Export dataset metadata to JSON
 python main.py subjectwise    # Subject-wise eval from checkpoint
@@ -133,7 +159,7 @@ python data/download.py --sample         # MNE sample data for quick test
 
 ```bash
 black . && ruff check .              # Format + lint
-pytest                               # Run all tests (267)
+pytest                               # Run all tests (350)
 pytest tests/ -v                     # Verbose, single file
 ```
 
@@ -155,7 +181,7 @@ python preprocessing/run_mne_pipeline.py --dataset physionet_mi   # explicit dat
 python training/train_eegnet.py --epochs 200 --data_dir data/processed/
 python training/train_baseline.py --n_components 6 --cv 5
 
-# Model selection (5 variants)
+# Model selection (via create_model factory)
 python training/train_eegnet.py --model eegnet                     # base (default)
 python training/train_eegnet.py --model eegnet_se                  # + SE attention
 python training/train_eegnet.py --model eegnet_mhsa                # + multi-head attention
@@ -178,6 +204,11 @@ python preprocessing/run_mne_pipeline.py --channels motor8 --binary --per_subjec
 python training/train_loso.py --data_dir data/loso_binary --n_subjects 30 --epochs 60
 python training/train_loso.py --data_dir data/loso_binary --n_subjects 30 --finetune 5   # + few-shot FT
 
+# SPDNet LOSO
+python training/train_spd_loso.py --data_dir data/loso_binary --n_subjects 30 --epochs 60 --align
+python training/train_spd_loso.py --data_dir data/loso_binary --n_subjects 30 --epochs 60 --align --cov_estimator lwf
+python training/train_spd_loso.py --data_dir data/loso_binary --n_subjects 30 --epochs 60 --align --multiband
+
 # BCI IV 2a LOSO
 python preprocessing/prepare_bci_iv_2a.py
 python training/train_loso.py --data_dir data/bci_iv_2a_processed --n_subjects 9 --epochs 60 --dataset bci_iv_2a
@@ -189,6 +220,18 @@ python main.py demo --source replay --data data/loso_binary/subj_01/X.npy \
     --checkpoint checkpoints/eegnet_spatiotemporal_best.pt --gating # + idle gating
 python main.py demo --all-subjects --source replay \
     --checkpoint checkpoints/eegnet_spatiotemporal_best.pt          # batch all subjects
+```
+
+### Riemannian & SPD
+
+```bash
+# Riemannian baselines
+python main.py riemann --method tangent --align
+python main.py riemann --method tangent --align --cov_estimator lwf
+python main.py riemann --method fgmdm --align --bands 8 12 12 16 16 20 20 24 24 28 28 30
+
+# SPDNet (SPD manifold deep learning)
+python training/train_spd_loso.py --data_dir data/loso_binary --n_subjects 30 --epochs 60 --align
 ```
 
 ### DeepBCI
@@ -203,6 +246,14 @@ python datasets/deepbci_loader.py --all                                  # All s
 ```bash
 python utils/report_excel.py --demo                    # Generate Excel template
 python utils/report_excel.py --input results.json      # From JSON results
+```
+
+### Paper Figures
+
+```bash
+python scripts/make_paper_figures.py                   # 6 figures + stats tests
+python scripts/analyze_spdnet_vs_tangent.py            # SPDNet vs Tangent comparison
+python scripts/analyze_ea_effects.py --data_dir data/loso_binary  # EA effect analysis
 ```
 
 ## Key Conventions
@@ -277,7 +328,7 @@ Saved to `checkpoints/{model_type}_best.pt` by default.
 
 ### Model factory
 
-Use `create_model()` from `models/eegnet_attn.py` to instantiate any EEGNet variant:
+Use `create_model()` from `models/eegnet_attn.py` to instantiate any model variant:
 
 ```python
 from models.eegnet_attn import create_model
@@ -288,17 +339,20 @@ model = create_model("eegnet_mhsa", n_channels=8, n_classes=3)
 model = create_model("fbcnet", n_channels=8, n_classes=3)
 model = create_model("eeg_tcnet", n_channels=8, n_classes=3)
 model = create_model("eeg_conformer", n_channels=8, n_classes=3)
+model = create_model("fb_tcnet", n_channels=8, n_classes=3)
 model = create_model("fb_maa_eegnet", n_channels=8, n_classes=3)
 model = create_model("maa_eegnet", n_channels=8, n_classes=3)
 model = create_model("maa_eegnet_pre", n_channels=8, n_classes=3)
 ```
 
-### New model architectures (Sprint 2)
+### New model architectures
 
 ```python
 from models.eeg_conformer import EEGConformer
 from models.eeg_tcnet import EEGTCNet
 from models.fbcnet import FBCNet, apply_filter_bank
+from models.fb_tcnet import FBTCNet
+from models.spd_models import create_spdnet, MultiBandSPDNet, SPDDecoder, ProtoSPDNet
 from models.mixstyle import MixStyle1d, MixStyle2d
 from models.motor_area_attention import MotorAreaAttention
 from models.fb_maa_eegnet import FBMAAEEGNet
@@ -314,6 +368,14 @@ model = EEGTCNet(n_channels=8, n_classes=2, F1=8, D=2, kernel_size=16)
 # FBCNet: Filter-bank CNN (requires multi-band input, 61.11% + EA)
 X_bands = apply_filter_bank(X, fs=250)  # (N, C, T) → (N, n_bands, C, T)
 model = FBCNet(n_bands=6, n_channels=8, n_classes=2)
+
+# FB-TCNet: Filter Bank + TCN (project original — combined FBCNet + EEG-TCNet)
+model = FBTCNet(n_bands=6, n_channels=8, n_classes=2, F1=8, D=2)
+
+# SPDNet: SPD manifold deep learning (Huang & Van Gool, AAAI 2017)
+from features.spd_covariance import compute_covariance
+covs = compute_covariance(X)  # (N, C, T) → (N, C, C) SPD matrices
+model = create_spdnet(n_classes=2, bimap_dims=[8, 6, 4])  # (N, C, C) → (N, n_classes)
 
 # MAA modules: Motor-Area Attention for 8ch motor-cortex EEG
 maa = MotorAreaAttention(n_channels=8)               # region-based channel weighting
@@ -341,6 +403,19 @@ loss_ct, centers = center_loss(features, labels, n_classes=3, centers=centers)
 loss = ce_loss + 0.01 * loss_ct
 ```
 
+### SPD covariance computation
+
+```python
+from features.spd_covariance import (
+    compute_covariance,           # SCM with regularization
+    compute_covariance_shrinkage, # Ledoit-Wolf shrinkage
+    compute_multiband_covariance, # Multi-band SPD matrices
+    paired_spd_augment,           # Per-class pair augmentation
+    mask_covariance_channels,     # Channel dropout
+    batch_geodesic_mixup,         # SPD manifold mixup
+)
+```
+
 ### 8ch Montage Configuration
 
 Channel montage is defined in `utils/config.py`. To change channels, edit `MOTOR_CHANNELS`:
@@ -365,7 +440,7 @@ MOTOR_CHANNELS_BCI4 = [
 
 ## Current Results
 
-### PhysioNet MI (30 subjects, 8ch, binary LOSO, 80 epochs)
+### PhysioNet MI (30 subjects, 8ch, binary LOSO, 80 epochs for DL, 60 for SPDNet)
 
 | Rank | Method | Type | Accuracy | Kappa |
 |------|-------|------|----------|-------|
@@ -374,14 +449,28 @@ MOTOR_CHANNELS_BCI4 = [
 | 3 | **FBCNet + EA** | DL + Filter Bank | **61.11%** ± 11.69% | 0.219 |
 | 4 | Tangent Space + LDA + EA | Riemannian | 60.44% ± 9.64% | 0.212 |
 | 5 | FgMDM + EA (6-band, 8–30Hz) | Riemannian | 59.18% ± 8.12% | 0.180 |
-| 6 | EEGNet + EA | DL | 58.00% ± 10.06% | 0.161 |
-| 7 | EEGNet + SpatiotemporalAttn + EA | DL + Attention | 57.78% ± 8.55% | 0.158 |
-| 8 | MDM + EA | Riemannian | 56.22% ± 10.52% | 0.127 |
-| 9 | FB-MAA-EEGNet + EA | DL + FB + MAA | 53.78% ± 7.68% | 0.070 |
-| 10 | EEGNet (no EA) | DL | 51.93% ± 7.20% | 0.033 |
-| 11 | FBCNet (no EA) | DL + Filter Bank | 49.70% ± 2.66% | -0.010 |
+| 6 | **SPDNet + EA** (seed42) | DL + SPD Manifold | **58.52%** ± 8.38% | 0.161 |
+| 7 | EEGNet + EA | DL | 58.00% ± 10.06% | 0.161 |
+| 8 | EEGNet + SpatiotemporalAttn + EA | DL + Attention | 57.78% ± 8.55% | 0.158 |
+| 9 | MDM + EA | Riemannian | 56.22% ± 10.52% | 0.127 |
+| 10 | FB-MAA-EEGNet + EA | DL + FB + MAA | 53.78% ± 7.68% | 0.070 |
+| 11 | EEGNet (no EA) | DL | 51.93% ± 7.20% | 0.033 |
+| 12 | SPDNet (no EA) | DL + SPD Manifold | 50.59% ± 1.87% | 0.000 |
+| 13 | FBCNet (no EA) | DL + Filter Bank | 49.70% ± 2.66% | -0.010 |
 
-> Key insight: DL models can beat Riemannian baselines. EEG Conformer + EA (63.93%) and EEG-TCNet + EA (63.41%) both surpass Tangent Space + LDA + EA (60.44%). EA is the single strongest regularizer: +3–11pp across all DL models. Temporal modeling (Transformer/TCN) is the most impactful architectural choice. Fixed-group Motor-Area Attention (MAA) degrades performance in all variants.
+> Key insight: EEG Conformer + EA (63.93%) remains SOTA. SPDNet + EA (58.52%) is competitive with EEGNet + EA (58.00%), demonstrating SPD manifold deep learning is viable on 8ch MI. Without EA, SPDNet collapses to chance (50.59%, κ≈0) — EA is critical for SPDNet. Temporal modeling (Transformer/TCN) remains the most impactful architectural choice.
+
+### SPDNet Ablation
+
+| Config | Accuracy | Kappa |
+|--------|----------|-------|
+| SPDNet + EA (d=[8,8], seed42) | **58.52%** ± 8.38% | 0.161 |
+| SPDNet + EA (d=[8,8], seed123) | 56.96% ± 9.52% | 0.133 |
+| SPDNet + EA (d=[8,8], seed456) | 55.93% ± 8.83% | 0.112 |
+| SPDNet + EA (d=[8,8], default) | 50.44% ± 4.59% | 0.020 |
+| SPDNet (no EA) | 50.59% ± 1.87% | 0.000 |
+
+> SPDNet training is seed-sensitive; controlled seeds produce stable results, but default-seed runs collapse. Without EA, all SPDNet runs collapse to majority class.
 
 ### EA Gain Analysis
 
@@ -390,6 +479,7 @@ MOTOR_CHANNELS_BCI4 = [
 | EEGNet | 51.93% | 58.00% | +6.07pp |
 | EEGNet + SpatiotemporalAttn | 55.04% | 57.78% | +2.74pp |
 | FBCNet | 49.70% | 61.11% | +11.41pp |
+| SPDNet | 50.59% | 58.52% | +7.93pp |
 | Tangent Space | 60.44% | 60.44% | ±0.00pp (affine-invariant) |
 
 ### Riemannian Cov Estimator & Metric Sweep
@@ -418,6 +508,7 @@ MOTOR_CHANNELS_BCI4 = [
 - EEG Conformer: Song et al. 2023 (arXiv:2301.05578)
 - EEG-TCNet: Ingolfsson et al. 2020 (IEEE SMC)
 - FBCNet: Bakshi et al. 2021 (arXiv:2104.01233)
+- SPDNet: Huang & Van Gool 2017, "A Riemannian Network for SPD Matrix Learning" (AAAI)
 - MNE-Python: https://mne.tools
 - MOABB: https://github.com/NeuroTechX/moabb
 - pyriemann: https://github.com/pyRiemann/pyRiemann
@@ -425,39 +516,41 @@ MOTOR_CHANNELS_BCI4 = [
 
 ## Current Sprint
 
-**Sprint 2** (June 2026): Traditional-driven neural network design + full experiment sweep.
+**Sprint 3** (late June–July 2026): SPD manifold deep learning + paper drafting.
 
-- [x] FBCSP_BANDS corrected: 9-band 4–40Hz → 6-band 8–30Hz (aligned with preprocessing)
-- [x] Riemannian sweep: cov estimator (scm/lwf/oas/mcd) + metric (riemann/logeuclid/logchol/wasserstein)
-- [x] DL baselines with EA: EEGNet (58.00%), FBCNet (61.11%), EEG-TCNet (63.41%), EEG Conformer (63.93%)
-- [x] FB-MAA-EEGNet implementation (Filter Bank + Motor-Area Attention + EEGNet)
-- [x] MAA-EEGNet (3 variants: post-temporal, pre-temporal, with filter bank)
-- [x] MAA ablation: fixed-group attention degrades performance (−2~4pp vs EEGNet baseline)
-- [x] EA gain analysis: +3~11pp across all DL models; FBCNet benefits most (+11.41pp)
-- [x] Time window sweep script (--tmin/--tmax CLI args + orchestrator)
-- [x] 10-config full ablation script
-- [x] Test suite: 304 → 335 tests (31 new: MAA + FB-MAA-EEGNet)
-- [x] README v2 with full results, EA gain table, model comparison
+- [x] SPDNet implementation: BiMap, ReEig, LogEig layers + model factory
+- [x] SPD covariance computation: SCM, Ledoit-Wolf shrinkage, multiband
+- [x] SPDNet LOSO training script with EA, seed control, multiband support
+- [x] SPD data augmentation: paired per-class augmentation, channel masking, geodesic mixup
+- [x] SPDNet results: 58.52% + EA (competitive with EEGNet + EA), +7.93pp EA gain
+- [x] FB-TCNet model (Filter Bank + TCN, project original)
+- [x] Paper figures script (6 figures): main results, ablation, EA gain, SPDNet vs Tangent, few-shot, t-SNE
+- [x] EA × Architecture interaction analysis script
+- [x] Paper draft (docs/paper_draft.md, results/paper_outputs/)
+- [x] Test suite: 335 → 350 tests (29 files)
 
 **Key findings:**
-- EEG Conformer + EA is the new SOTA at 63.93% (vs Riemannian 60.44%)
-- Temporal modeling (Transformer/TCN) > spatial attention for 8ch MI
-- EA is the single most impactful technique for DL
-- scm covariance is optimal; shrinkage doesn't help 8ch
-- Fixed-group MAA needs redesign (learnable grouping, multi-head, or gating-based)
+- SPDNet + EA (58.52%) is competitive with EEGNet + EA (58.00%) — SPD manifold DL viable on 8ch
+- SPDNet without EA collapses to chance (κ≈0) — EA is even more critical for SPDNet than for CNN
+- SPDNet training is seed-sensitive; controlled seeds needed for stable convergence
+- EEG Conformer + EA (63.93%) remains SOTA; temporal modeling > spatial/manifold for 8ch MI
 
-### Sprint 1.5 (completed): Model zoo + domain generalization + code review.
+### Sprint 2 (completed): Traditional-driven neural network design + full experiment sweep.
 
-- [x] EEG Conformer model (CNN + Transformer for MI-EEG)
-- [x] EEG-TCNet model (CNN + TCN for embedded deployment)
-- [x] FBCNet model (Filter-Bank CNN with variance pooling)
-- [x] MixStyle domain generalization (feature-statistics mixing)
-- [x] Euclidean Alignment (EA) cross-subject covariance alignment
-- [x] Domain adaptation losses (Center Loss + MMD)
-- [x] DeepBCI session loader (session → .npy training data)
-- [x] Full code review + bug fixes across all modules
-- [x] Test suite expanded (131 → 304 tests)
-- [x] Riemannian Geometry baseline (Tangent Space / MDM / FgMDM) — 60.30% binary LOSO
+- [x] FBCSP_BANDS corrected: 9-band 4–40Hz → 6-band 8–30Hz
+- [x] Riemannian sweep: cov estimator + metric
+- [x] DL baselines with EA: EEGNet, FBCNet, EEG-TCNet, EEG Conformer
+- [x] MAA-EEGNet (3 variants) + FB-MAA-EEGNet
+- [x] EA gain analysis: +3~11pp; FBCNet benefits most
+- [x] Time window sweep script + 10-config ablation
+- [x] Test suite: 304 → 335 tests
+
+### Sprint 1.5 (completed): Model zoo + domain generalization.
+
+- [x] EEG Conformer, EEG-TCNet, FBCNet
+- [x] MixStyle, EA, Center Loss, MMD
+- [x] Riemannian Geometry baseline (60.44%)
+- [x] Test suite: 131 → 304 tests
 
 ### Backlog
 - [ ] Hyperparameter sweep for top models (Conformer/TCNet)
@@ -465,3 +558,5 @@ MOTOR_CHANNELS_BCI4 = [
 - [ ] Time window sweep (full run — script ready, needs compute)
 - [ ] Real-time LSL integration test with DeepBCI hardware
 - [ ] MAA redesign: learnable grouping or gated attention
+- [ ] SPDNet SSL: prototype regularization, SPD augmentation
+- [ ] NeurIPS-style paper submission

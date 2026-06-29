@@ -379,6 +379,154 @@ def mask_covariance_channels(
     return C_masked, mask
 
 
+# ---------------------------------------------------------------------------
+# Shrinkage covariance estimation
+# ---------------------------------------------------------------------------
+
+
+def compute_covariance_shrinkage(
+    X: np.ndarray, alpha: float | None = None, reg: float = 1e-4
+) -> np.ndarray:
+    """Compute shrinkage-regularized covariance matrices.
+
+    C_shrunk = (1 - alpha) * SCM + alpha * trace(SCM)/d * I
+
+    If alpha is None, use OAS (Oracle Approximating Shrinkage) formula.
+
+    Parameters
+    ----------
+    X : (N, C, T)  Raw EEG trials.
+    alpha : float | None  Shrinkage intensity. None = OAS auto.
+    reg : float  Additional regularisation.
+
+    Returns
+    -------
+    covs : (N, C, C)  Shrunk SPD covariance matrices.
+    """
+    N, C, T = X.shape
+    covs = np.empty((N, C, C), dtype=np.float32)
+    for i in range(N):
+        x = X[i]
+        S = (x @ x.T) / T  # SCM
+
+        if alpha is None:
+            # OAS: optimal shrinkage under Frobenius norm
+            trS = np.trace(S)
+            trS2 = np.trace(S @ S)
+            d = C
+            # OAS formula: rho = (1 - 2/d) * tr(S^2) + tr(S)^2
+            rho = ((1.0 - 2.0 / d) * trS2 + trS**2) / (T * (trS2 - trS**2 / d) + 1e-15)
+            alpha_oas = min(rho / (1.0 + rho), 1.0)
+            alpha_use = alpha_oas
+        else:
+            alpha_use = alpha
+
+        C_shrunk = (1.0 - alpha_use) * S + alpha_use * (trS / C) * np.eye(C)
+        # Additional ridge
+        if reg > 0:
+            C_shrunk += reg * np.trace(C_shrunk) / C * np.eye(C)
+        covs[i] = C_shrunk.astype(np.float32)
+    return covs
+
+
+# ---------------------------------------------------------------------------
+# Geodesic Mixup on SPD manifold
+# ---------------------------------------------------------------------------
+
+
+def geodesic_mixup(
+    C1: np.ndarray, C2: np.ndarray, lam: float | None = None
+) -> np.ndarray:
+    """Geodesic interpolation between two SPD matrices.
+
+    C_mix = C1^{1/2} (C1^{-1/2} C2 C1^{-1/2})^λ C1^{1/2}
+
+    Parameters
+    ----------
+    C1, C2 : (..., C, C)  SPD matrices to mix.
+    lam : float | None  Mixing ratio in [0,1]. None = random uniform.
+
+    Returns
+    -------
+    C_mix : (..., C, C)  Geodesically interpolated SPD matrix.
+    """
+    if lam is None:
+        lam = np.random.uniform(0.3, 0.7)  # biased toward center for stability
+
+    # Matrix sqrt and inv-sqrt via eigh (handle batch via loop for simplicity)
+    is_scalar = (C1.ndim == 2)
+    if is_scalar:
+        C1 = C1[np.newaxis, ...]
+        C2 = C2[np.newaxis, ...]
+        if not np.isscalar(lam):
+            lam = np.atleast_1d(lam)
+
+    B = C1.shape[0]
+    C_mix = np.empty_like(C1)
+    for b in range(B):
+        c1, c2 = C1[b], C2[b]
+        lb = lam if np.isscalar(lam) else lam[b]
+        e1, v1 = np.linalg.eigh(c1); e1 = np.maximum(e1, 1e-10)
+        s = v1 @ np.diag(np.sqrt(e1)) @ v1.T
+        is_ = v1 @ np.diag(1.0 / np.sqrt(e1)) @ v1.T
+        mid = is_ @ c2 @ is_
+        em, vm = np.linalg.eigh(mid); em = np.maximum(em, 1e-10)
+        mid_l = vm @ np.diag(em**lb) @ vm.T
+        C_mix[b] = s @ mid_l @ s
+
+    if is_scalar:
+        return C_mix[0].astype(np.float32)
+    return C_mix.astype(np.float32)
+
+
+def batch_geodesic_mixup(
+    C: np.ndarray, y: np.ndarray, alpha: float = 0.5
+) -> tuple[np.ndarray, np.ndarray]:
+    """In-batch geodesic mixup for cross-subject augmentation.
+
+    For each sample, mix it with a random same-class sample from the batch.
+    The label is interpolated as a weighted combination (soft label).
+
+    Parameters
+    ----------
+    C : (N, C, C)  SPD covariance matrices.
+    y : (N,)  Integer labels.
+    alpha : float  Beta distribution concentration (default 0.5).
+
+    Returns
+    -------
+    C_mixed : (N, C, C)  Mixed SPD matrices.
+    y_mixed : (N, n_classes)  Soft labels (one-hot interpolation).
+    """
+    N = len(C)
+    n_classes = y.max() + 1
+    indices = np.arange(N)
+
+    # Sample lambda from Beta(alpha, alpha)
+    lam = np.random.beta(alpha, alpha, size=N)
+
+    # For each sample, pick a random same-class partner
+    partner_idx = np.empty(N, dtype=int)
+    for c in range(n_classes):
+        c_mask = y == c
+        c_indices = indices[c_mask]
+        if len(c_indices) > 1:
+            # Shuffle within class
+            partner_idx[c_mask] = np.random.permutation(c_indices)
+        else:
+            partner_idx[c_mask] = c_indices
+
+    # Geodesic mixup
+    C_mixed = geodesic_mixup(C, C[partner_idx], lam=lam)
+
+    # Soft labels: interpolation of one-hot encodings
+    y_onehot = np.eye(n_classes)[y]
+    y_partner = np.eye(n_classes)[y[partner_idx]]
+    y_mixed = lam[:, None] * y_onehot + (1 - lam[:, None]) * y_partner
+
+    return C_mixed, y_mixed
+
+
 def _apply_spd_aug(
     C: np.ndarray, aug_type: str, n_drop: int, perturb_scale: float
 ) -> np.ndarray:

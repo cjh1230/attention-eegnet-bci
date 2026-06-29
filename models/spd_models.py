@@ -343,8 +343,126 @@ class SPDDecoder(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# Multi-band SPDNet
+# Prototype-regularized SPDNet (Riemannian Prototype Regularization)
 # ---------------------------------------------------------------------------
+
+
+class ProtoSPDNet(nn.Module):
+    """SPDNet with Riemannian Prototype Regularization.
+
+    Maintains learnable class prototypes in the LogEig tangent space.
+    During training, LogEig features are pulled toward their class prototype
+    and pushed away from other prototypes.
+
+    Parameters
+    ----------
+    n_channels, n_classes, bimap_dims, dropout : see SPDNetModel.
+    proto_temp : float  Temperature for prototype-based logits.
+    """
+
+    def __init__(
+        self,
+        n_channels: int = 8,
+        n_classes: int = 2,
+        bimap_dims: list[int] | None = None,
+        dropout: float = 0.3,
+        proto_temp: float = 0.1,
+    ):
+        super().__init__()
+        if bimap_dims is None:
+            bimap_dims = [n_channels, n_channels]
+
+        self.n_classes = n_classes
+        self.proto_temp = proto_temp
+        d_last = bimap_dims[-1]
+        self.feat_dim = d_last * (d_last + 1) // 2
+
+        # SPD backbone (without classifier)
+        layers: list[nn.Module] = []
+        for i in range(len(bimap_dims) - 1):
+            layers.append(BiMap(bimap_dims[i], bimap_dims[i + 1]))
+            layers.append(ReEig())
+        self.spd_blocks = nn.Sequential(*layers)
+        self.log_eig = LogEig()
+
+        # Learnable class prototypes in tangent space
+        self.prototypes = nn.Parameter(
+            torch.empty(n_classes, self.feat_dim)
+        )
+        nn.init.xavier_uniform_(self.prototypes)
+
+        # Linear classifier (standard)
+        self.dropout = nn.Dropout(dropout)
+        self.classifier = nn.Linear(self.feat_dim, n_classes)
+
+        self._triu_idx: torch.Tensor | None = None
+
+    def _get_triu_idx(self, d: int, device: torch.device) -> torch.Tensor:
+        if self._triu_idx is None or self._triu_idx.device != device:
+            rows, cols = torch.triu_indices(d, d, device=device)
+            self._triu_idx = torch.stack([rows, cols])
+        return self._triu_idx
+
+    def extract_features(self, C: torch.Tensor) -> torch.Tensor:
+        """Extract LogEig features from SPD input."""
+        out = self.spd_blocks(C)
+        out = self.log_eig(out)
+        d = out.shape[-1]
+        idx = self._get_triu_idx(d, out.device)
+        feats = out[:, idx[0], idx[1]]  # (B, feat_dim)
+        return feats
+
+    def forward(
+        self, C: torch.Tensor, return_features: bool = False
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        """Forward pass.
+
+        Returns
+        -------
+        logits : (B, n_classes)
+        features : (B, feat_dim)  Only if return_features=True.
+        """
+        feats = self.extract_features(C)
+        feats_drop = self.dropout(feats)
+        logits = self.classifier(feats_drop)
+
+        if return_features:
+            return logits, feats
+        return logits
+
+
+def proto_loss(
+    features: torch.Tensor,
+    labels: torch.Tensor,
+    prototypes: torch.Tensor,
+    temperature: float = 0.1,
+) -> torch.Tensor:
+    """Prototype-based contrastive loss.
+
+    Computes cosine similarity between features and prototypes.
+    Pulls features toward their correct prototype (InfoNCE-style).
+
+    Parameters
+    ----------
+    features : (B, D)  L2-normalized LogEig features.
+    labels : (B,)  Integer class labels.
+    prototypes : (K, D)  Learnable class prototypes.
+    temperature : float  Softmax temperature.
+
+    Returns
+    -------
+    loss : scalar.
+    """
+    # Normalize
+    feats_norm = nn.functional.normalize(features, dim=-1)
+    proto_norm = nn.functional.normalize(prototypes, dim=-1)
+
+    # Cosine similarity → logits
+    sim = torch.matmul(feats_norm, proto_norm.T) / temperature  # (B, K)
+
+    # InfoNCE: pull toward correct prototype
+    loss = nn.functional.cross_entropy(sim, labels)
+    return loss
 
 
 class MultiBandSPDNet(nn.Module):

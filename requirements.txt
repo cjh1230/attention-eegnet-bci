@@ -1,14 +1,22 @@
 # BCI Project Dependencies
 # ========================
+# Install: pip install -r requirements.txt
+# Or use conda: conda env create -f environment.yml && conda activate bci
+
 # Core
 mne>=1.6
 numpy>=1.24
 scipy>=1.11
 scikit-learn>=1.3
+pandas>=2.0
 
 # Deep Learning
 torch>=2.1
 torchvision>=0.16
+
+# BCI Datasets & Riemannian
+moabb>=1.5
+pyriemann>=0.5
 
 # Hyperparameter Search
 optuna>=3.5
@@ -24,9 +32,6 @@ plotly>=5.17
 
 # Reporting
 openpyxl>=3.1
-
-# Riemannian Geometry
-pyriemann>=0.5
 
 # Dev / Testing
 pytest>=7.4
