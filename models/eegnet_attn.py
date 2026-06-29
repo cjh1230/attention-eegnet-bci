@@ -173,7 +173,7 @@ def create_model(
     model_type : str
         "eegnet" | "eegnet_se" | "eegnet_mhsa" | "eegnet_temporal" |
         "eegnet_spatiotemporal" | "fbcnet" | "eeg_tcnet" |
-        "eeg_conformer" | "fb_maa_eegnet"
+        "eeg_conformer" | "fb_maa_eegnet" | "spdnet"
     n_channels : int
     n_classes : int
     **kwargs : passed to model constructor
@@ -235,6 +235,12 @@ def create_model(
 
         return FBTCNet(n_channels=n_channels, n_classes=n_classes, **kwargs)
 
+    if model_type == "spdnet":
+        from models.spd_models import create_spdnet
+
+        return create_spdnet(n_channels=n_channels, n_classes=n_classes, **kwargs)
+
     raise ValueError(f"Unknown model_type: {model_type}. "
                      f"Choices: eegnet, fbcnet, eeg_tcnet, "
-                     f"eeg_conformer, fb_maa_eegnet, {', '.join(attn_map)}")
+                     f"eeg_conformer, fb_maa_eegnet, spdnet, "
+                     f"{', '.join(attn_map)}")
