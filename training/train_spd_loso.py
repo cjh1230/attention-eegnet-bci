@@ -36,8 +36,13 @@ from sklearn.utils.class_weight import compute_class_weight
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from features.spd_covariance import compute_covariance
-from models.spd_models import create_spdnet
+from features.spd_covariance import (
+    compute_covariance,
+    compute_multiband_covariance,
+    paired_spd_augment,
+    mask_covariance_channels,
+)
+from models.spd_models import create_spdnet, MultiBandSPDNet, SPDDecoder
 from preprocessing.alignment import EuclideanAlignment
 from utils.metrics import (
     classification_report,
@@ -239,6 +244,344 @@ def _evaluate_spdnet(
 
 
 # ---------------------------------------------------------------------------
+# Multi-band training helpers
+# ---------------------------------------------------------------------------
+
+
+def _train_spdnet_mb(
+    model: nn.Module,
+    C_train: dict[str, np.ndarray],
+    y_train: np.ndarray,
+    device: torch.device,
+    epochs: int = 60,
+    batch_size: int = 64,
+    lr: float = 1e-3,
+    weight_decay: float = 1e-4,
+    patience: int = 30,
+    verbose: bool = True,
+) -> nn.Module:
+    """Train MultiBandSPDNet on multi-band covariance dict."""
+    from sklearn.model_selection import train_test_split
+
+    # Convert dict to stacked tensors
+    n_samples = len(y_train)
+    band_names = list(C_train.keys())
+
+    # 90/10 split
+    if n_samples >= 20 and patience > 0:
+        idx = np.arange(n_samples)
+        tr_idx, val_idx = train_test_split(
+            idx, test_size=0.10, stratify=y_train, random_state=42
+        )
+        C_tr = {k: v[tr_idx] for k, v in C_train.items()}
+        y_tr = y_train[tr_idx]
+        C_val = {k: v[val_idx] for k, v in C_train.items()}
+        y_val = y_train[val_idx]
+    else:
+        C_tr, y_tr = C_train, y_train
+        C_val, y_val = None, None
+
+    # Simple DataLoader: iterate over indices
+    n_tr = len(y_tr)
+    indices = np.arange(n_tr)
+
+    classes = np.unique(y_tr)
+    if len(classes) > 1:
+        class_weights = compute_class_weight("balanced", classes=classes, y=y_tr)
+    else:
+        class_weights = np.ones(1)
+    criterion = nn.CrossEntropyLoss(
+        weight=torch.tensor(class_weights, dtype=torch.float32, device=device)
+    )
+
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=lr, weight_decay=weight_decay
+    )
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+
+    best_val_acc = -1.0
+    best_state = None
+    patience_counter = 0
+
+    for epoch in range(1, epochs + 1):
+        # Train
+        model.train()
+        np.random.shuffle(indices)
+        total_loss = 0.0
+        for start in range(0, n_tr, batch_size):
+            batch_idx = indices[start:start + batch_size]
+            Xb = {k: torch.from_numpy(v[batch_idx]).float().to(device)
+                  for k, v in C_tr.items()}
+            yb = torch.from_numpy(y_tr[batch_idx]).long().to(device)
+            optimizer.zero_grad()
+            loss = criterion(model(Xb), yb)
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item() * len(batch_idx)
+        scheduler.step()
+        avg_loss = total_loss / n_tr
+
+        # Validate
+        if C_val is not None and patience > 0:
+            model.eval()
+            correct, total = 0, 0
+            n_val = len(y_val)
+            with torch.no_grad():
+                for start in range(0, n_val, batch_size):
+                    batch_idx = slice(start, start + batch_size)
+                    Xb = {k: torch.from_numpy(v[batch_idx]).float().to(device)
+                          for k, v in C_val.items()}
+                    yb = torch.from_numpy(y_val[batch_idx]).long().to(device)
+                    preds = model(Xb).argmax(-1)
+                    correct += (preds == yb).sum().item()
+                    total += yb.size(0)
+            val_acc = correct / total
+
+            if val_acc > best_val_acc:
+                best_val_acc = val_acc
+                best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+                patience_counter = 0
+            else:
+                patience_counter += 1
+
+            if patience_counter >= patience:
+                if verbose:
+                    print(f"    Early stop @ epoch {epoch}  val_acc={val_acc:.4f}")
+                break
+        else:
+            best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+
+        if verbose and epoch % 20 == 0:
+            status = f"    Epoch {epoch:3d}/{epochs}  loss={avg_loss:.4f}"
+            if C_val is not None and patience > 0:
+                status += f"  val_acc={val_acc:.4f}"
+            print(status)
+
+    if best_state is not None:
+        model.load_state_dict(best_state)
+    return model
+
+
+def _evaluate_spdnet_mb(
+    model: nn.Module,
+    C_test: dict[str, np.ndarray],
+    y_test: np.ndarray,
+    device: torch.device,
+    batch_size: int = 64,
+) -> dict:
+    """Evaluate MultiBandSPDNet on test data."""
+    n_test = len(y_test)
+    model.eval()
+    all_preds, all_labels = [], []
+    with torch.no_grad():
+        for start in range(0, n_test, batch_size):
+            batch_idx = slice(start, start + batch_size)
+            Xb = {k: torch.from_numpy(v[batch_idx]).float().to(device)
+                  for k, v in C_test.items()}
+            yb = torch.from_numpy(y_test[batch_idx]).long()
+            all_preds.append(model(Xb).argmax(-1).cpu())
+            all_labels.append(yb)
+
+    y_pred = torch.cat(all_preds).numpy()
+    y_true = torch.cat(all_labels).numpy()
+
+    metrics = classification_report(y_true, y_pred)
+    metrics["per_class_recall"] = per_class_recall(y_true, y_pred)
+    metrics["per_class_specificity"] = per_class_specificity(y_true, y_pred)
+    metrics["per_class_f1"] = per_class_f1(y_true, y_pred)
+    metrics["n_trials"] = len(y_true)
+    return metrics
+
+
+# ---------------------------------------------------------------------------
+# Contrastive pre-training (SPD manifold SSL)
+# ---------------------------------------------------------------------------
+
+
+class _ProjectionHead(nn.Module):
+    """2-layer MLP projection head for contrastive learning."""
+
+    def __init__(self, in_dim: int, hidden_dim: int = 64, out_dim: int = 32):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(in_dim, hidden_dim),
+            nn.BatchNorm1d(hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, out_dim),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
+
+
+def pretrain_contrastive(
+    encoder: nn.Module,
+    C_data: np.ndarray,
+    device: torch.device,
+    pretrain_epochs: int = 100,
+    batch_size: int = 64,
+    lr: float = 1e-3,
+    temperature: float = 0.1,
+    verbose: bool = True,
+) -> nn.Module:
+    """SimCLR-style contrastive pre-training on SPD matrices.
+
+    Pre-trains the encoder (spd_blocks + log_eig) using paired augmentations.
+    No labels are used.
+    """
+    n_samples = len(C_data)
+    n_channels = C_data.shape[-1]
+    proj_in = n_channels * (n_channels + 1) // 2  # upper-tri dims
+
+    proj = _ProjectionHead(proj_in, hidden_dim=64, out_dim=32).to(device)
+    optimizer = torch.optim.AdamW(
+        list(encoder.parameters()) + list(proj.parameters()),
+        lr=lr, weight_decay=1e-4,
+    )
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=pretrain_epochs
+    )
+
+    encoder.train()
+    proj.train()
+
+    for epoch in range(1, pretrain_epochs + 1):
+        # Shuffle
+        idx = np.random.permutation(n_samples)
+        total_loss = 0.0
+        n_batches = 0
+
+        for start in range(0, n_samples, batch_size):
+            batch_idx = idx[start:start + batch_size]
+            C_batch = C_data[batch_idx]
+
+            # Generate two augmented views
+            C1, C2 = paired_spd_augment(C_batch)
+            C1_t = torch.from_numpy(C1).float().to(device)
+            C2_t = torch.from_numpy(C2).float().to(device)
+            C_both = torch.cat([C1_t, C2_t], dim=0)  # (2B, C, C)
+
+            # Encode
+            features = encoder.spd_blocks(C_both)
+            features = encoder.log_eig(features)
+            d = features.shape[-1]
+            idx_triu = encoder._get_triu_idx(d, features.device)
+            features = features[:, idx_triu[0], idx_triu[1]]  # (2B, feat)
+
+            # Project
+            z = proj(features)  # (2B, proj_out)
+            z = nn.functional.normalize(z, dim=-1)
+
+            # NT-Xent loss
+            z1, z2 = z.chunk(2, dim=0)  # each (B, proj_out)
+            sim = torch.matmul(z1, z2.T) / temperature  # (B, B)
+            labels = torch.arange(len(z1), device=device)
+
+            loss = nn.functional.cross_entropy(sim, labels)
+            # Symmetric loss
+            sim_t = torch.matmul(z2, z1.T) / temperature
+            loss = (loss + nn.functional.cross_entropy(sim_t, labels)) / 2
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+            n_batches += 1
+
+        scheduler.step()
+
+        if verbose and epoch % 20 == 0:
+            print(f"    Pretrain {epoch:3d}/{pretrain_epochs}  "
+                  f"loss={total_loss / max(n_batches, 1):.4f}")
+
+    # Return pre-trained encoder (projection head discarded)
+    encoder.eval()
+    return encoder
+
+
+def pretrain_masked(
+    encoder: nn.Module,
+    C_data: np.ndarray,
+    device: torch.device,
+    pretrain_epochs: int = 100,
+    batch_size: int = 64,
+    lr: float = 1e-3,
+    n_mask: int = 1,
+    verbose: bool = True,
+) -> nn.Module:
+    """Masked reconstruction pre-training on SPD matrices.
+
+    Randomly masks channels in the covariance matrix and trains the
+    encoder + decoder to reconstruct the original log-covariance.
+    """
+    n_samples = len(C_data)
+    n_channels = C_data.shape[-1]
+    feat_dim = n_channels * (n_channels + 1) // 2  # upper-tri dims
+
+    decoder = SPDDecoder(feat_dim, hidden_dim=64).to(device)
+    optimizer = torch.optim.AdamW(
+        list(encoder.parameters()) + list(decoder.parameters()),
+        lr=lr, weight_decay=1e-4,
+    )
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=pretrain_epochs
+    )
+
+    # Pre-compute log(C) targets (Log-Euclidean space is the reconstruction target)
+    C_orig = torch.from_numpy(C_data).float()
+    eigvals, eigvecs = torch.linalg.eigh(C_orig.to(torch.float64))
+    eigvals = torch.clamp(eigvals, min=1e-6)
+    log_C = (eigvecs @ torch.diag_embed(torch.log(eigvals)) @ eigvecs.transpose(-1, -2))
+    log_C = log_C.float()
+    idx_triu = torch.triu_indices(n_channels, n_channels)
+    targets = log_C[:, idx_triu[0], idx_triu[1]].to(device)  # (N, feat_dim)
+
+    encoder.train()
+    decoder.train()
+
+    for epoch in range(1, pretrain_epochs + 1):
+        idx = np.random.permutation(n_samples)
+        total_loss = 0.0
+        n_batches = 0
+
+        for start in range(0, n_samples, batch_size):
+            batch_idx = idx[start:start + batch_size]
+            C_batch = C_data[batch_idx]
+
+            # Mask channels
+            C_masked_np, _ = mask_covariance_channels(C_batch, n_mask=n_mask)
+            C_masked = torch.from_numpy(C_masked_np).float().to(device)
+
+            # Encode masked input
+            features = encoder.spd_blocks(C_masked)
+            features = encoder.log_eig(features)
+            d = features.shape[-1]
+            idx_triu_dev = encoder._get_triu_idx(d, features.device)
+            z = features[:, idx_triu_dev[0], idx_triu_dev[1]]  # (B, feat_dim)
+
+            # Decode → reconstruct log(C)
+            recon = decoder(z)  # (B, feat_dim)
+            target = targets[batch_idx]  # (B, feat_dim)
+
+            loss = nn.functional.mse_loss(recon, target)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+            n_batches += 1
+
+        scheduler.step()
+
+        if verbose and epoch % 20 == 0:
+            print(f"    MaskedPre {epoch:3d}/{pretrain_epochs}  "
+                  f"loss={total_loss / max(n_batches, 1):.6f}")
+
+    encoder.eval()
+    return encoder
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -263,6 +606,10 @@ def main():
         help="Covariance estimator (default: scm)",
     )
     parser.add_argument(
+        "--reg", type=float, default=1e-4,
+        help="Regularisation for SCM covariance (default: 1e-4)",
+    )
+    parser.add_argument(
         "--bimap_dims", type=int, nargs="+", default=[8, 6, 4],
         help="BiMap dimensions (default: 8 6 4)",
     )
@@ -282,6 +629,31 @@ def main():
         "--dataset", default="physionet_mi",
         choices=["physionet_mi", "bci_iv_2a", "deepbci"],
         help="Dataset name for semantic class labels",
+    )
+    parser.add_argument(
+        "--multi_band", action="store_true",
+        help="Use multi-band (mu + beta) covariance and MultiBandSPDNet",
+    )
+    parser.add_argument(
+        "--pretrain", action="store_true",
+        help="Enable SSL pre-training on SPD manifold",
+    )
+    parser.add_argument(
+        "--pretrain_mode", default="masked",
+        choices=["contrastive", "masked"],
+        help="SSL pre-training mode (default: masked)",
+    )
+    parser.add_argument(
+        "--pretrain_epochs", type=int, default=100,
+        help="Number of pre-training epochs (default: 100)",
+    )
+    parser.add_argument(
+        "--pretrain_lr", type=float, default=1e-3,
+        help="Learning rate for pre-training (default: 1e-3)",
+    )
+    parser.add_argument(
+        "--few_shot", type=int, default=0,
+        help="Few-shot LOSO: use only k trials per class from training subjects (0=disabled)",
     )
     parser.add_argument(
         "--seed", type=int, default=42,
@@ -311,6 +683,9 @@ def main():
     print(f"Channels: {n_channels}  Classes: {n_classes}")
 
     semantic_names = get_class_names(args.dataset)
+    # Override for binary PhysioNet MI: labels are [left_hand, right_hand]
+    if args.dataset == "physionet_mi" and n_classes == 2:
+        semantic_names = ["Left Hand", "Right Hand"]
     per_subject_results = []
 
     # ── LOSO loop ────────────────────────────────────────────────────────
@@ -341,41 +716,122 @@ def main():
                 "y": test_subj["y"],
             }
 
-        # ── Covariance computation ───────────────────────────────────────
+        # ── Few-shot subsampling (per class, before covariance) ──────────
         X_train_raw = np.concatenate([s["X"] for s in train_subjs], axis=0)
         y_train = np.concatenate([s["y"] for s in train_subjs], axis=0)
-        C_train = compute_covariance(X_train_raw, estimator=args.cov_estimator)
 
+        if args.few_shot > 0:
+            k = args.few_shot
+            classes = np.unique(y_train)
+            keep_idx = []
+            for c in classes:
+                c_idx = np.where(y_train == c)[0]
+                if len(c_idx) > k:
+                    c_idx = np.random.choice(c_idx, size=k, replace=False)
+                keep_idx.append(c_idx)
+            keep_idx = np.concatenate(keep_idx)
+            X_train_raw = X_train_raw[keep_idx]
+            y_train = y_train[keep_idx]
+            print(f"  Few-shot ({k}/class): X_train={X_train_raw.shape}")
         X_test_raw = test_subj["X"]
         y_test = test_subj["y"]
-        C_test = compute_covariance(X_test_raw, estimator=args.cov_estimator)
 
-        print(f"  C_train: {C_train.shape}  C_test: {C_test.shape}")
+        if args.multi_band:
+            # Multi-band: mu (8-13Hz) + beta (13-30Hz) sub-band covariance
+            C_train = compute_multiband_covariance(
+                X_train_raw, estimator=args.cov_estimator, reg=args.reg, fs=250,
+            )
+            C_test = compute_multiband_covariance(
+                X_test_raw, estimator=args.cov_estimator, reg=args.reg, fs=250,
+            )
+            n_bands = len(C_train)
+            print(f"  Bands: {list(C_train.keys())}  "
+                  f"shapes: {[v.shape for v in C_train.values()]}")
+        else:
+            C_train = compute_covariance(
+                X_train_raw, estimator=args.cov_estimator, reg=args.reg
+            )
+            C_test = compute_covariance(
+                X_test_raw, estimator=args.cov_estimator, reg=args.reg
+            )
+            print(f"  C_train: {C_train.shape}  C_test: {C_test.shape}")
 
         # ── Create model ─────────────────────────────────────────────────
-        model = create_spdnet(
-            n_channels=n_channels,
-            n_classes=n_classes,
-            bimap_dims=args.bimap_dims,
-            dropout=args.dropout,
-        ).to(device)
+        if args.multi_band:
+            model = MultiBandSPDNet(
+                n_bands=n_bands,
+                n_channels=n_channels,
+                n_classes=n_classes,
+                bimap_dims=args.bimap_dims,
+                dropout=args.dropout,
+                share_branches=True,
+            ).to(device)
+        else:
+            model = create_spdnet(
+                n_channels=n_channels,
+                n_classes=n_classes,
+                bimap_dims=args.bimap_dims,
+                dropout=args.dropout,
+            ).to(device)
+
+        # ── SSL Pre-training (optional) ──────────────────────────────────
+        if args.pretrain and not args.multi_band:
+            if args.pretrain_mode == "masked":
+                print(f"  Pre-training (masked recon, {args.pretrain_epochs} epochs)...")
+                model = pretrain_masked(
+                    encoder=model,
+                    C_data=C_train,
+                    device=device,
+                    pretrain_epochs=args.pretrain_epochs,
+                    batch_size=args.batch_size,
+                    lr=args.pretrain_lr,
+                    verbose=True,
+                )
+            else:
+                print(f"  Pre-training (contrastive, {args.pretrain_epochs} epochs)...")
+                model = pretrain_contrastive(
+                    encoder=model,
+                    C_data=C_train,
+                    device=device,
+                    pretrain_epochs=args.pretrain_epochs,
+                    batch_size=args.batch_size,
+                    lr=args.pretrain_lr,
+                    verbose=True,
+                )
 
         # ── Train ────────────────────────────────────────────────────────
-        model = _train_spdnet(
-            model=model,
-            C_train=C_train,
-            y_train=y_train,
-            device=device,
-            epochs=args.epochs,
-            batch_size=args.batch_size,
-            lr=args.lr,
-            weight_decay=args.weight_decay,
-            patience=args.patience,
-            verbose=True,
-        )
+        if args.multi_band:
+            model = _train_spdnet_mb(
+                model=model,
+                C_train=C_train,
+                y_train=y_train,
+                device=device,
+                epochs=args.epochs,
+                batch_size=args.batch_size,
+                lr=args.lr,
+                weight_decay=args.weight_decay,
+                patience=args.patience,
+                verbose=True,
+            )
+        else:
+            model = _train_spdnet(
+                model=model,
+                C_train=C_train,
+                y_train=y_train,
+                device=device,
+                epochs=args.epochs,
+                batch_size=args.batch_size,
+                lr=args.lr,
+                weight_decay=args.weight_decay,
+                patience=args.patience,
+                verbose=True,
+            )
 
         # ── Evaluate ─────────────────────────────────────────────────────
-        metrics = _evaluate_spdnet(model, C_test, y_test, device)
+        if args.multi_band:
+            metrics = _evaluate_spdnet_mb(model, C_test, y_test, device)
+        else:
+            metrics = _evaluate_spdnet(model, C_test, y_test, device)
         print(f"  Test:    acc={metrics['accuracy']:.4f}  "
               f"kappa={metrics['kappa']:.4f}")
 
@@ -410,7 +866,11 @@ def main():
     ea_tag = "_ea" if args.align else ""
     cov_tag = f"_{args.cov_estimator}" if args.cov_estimator != "scm" else ""
 
-    csv_name = f"loso_spdnet{ds_tag}{ea_tag}{cov_tag}.csv"
+    dims_tag = f"_d{'_'.join(str(d) for d in args.bimap_dims)}"
+    fs_tag = f"_fs{args.few_shot}" if args.few_shot > 0 else ""
+    pretrain_tag = f"_pt-{args.pretrain_mode}{args.pretrain_epochs}" if args.pretrain else ""
+    seed_tag = f"_seed{args.seed}"
+    csv_name = f"loso_spdnet{ds_tag}{ea_tag}{cov_tag}{dims_tag}{fs_tag}{pretrain_tag}{seed_tag}.csv"
     csv_path = output_dir / csv_name
 
     if per_subject_results:
@@ -450,7 +910,7 @@ def main():
     print(f"Per-subject: {[f'{a:.3f}' for a in accs]}")
     print(f"Best/Worst: {accs.max():.4f} / {accs.min():.4f}")
 
-    json_name = f"loso_spdnet{ds_tag}{ea_tag}{cov_tag}_summary.json"
+    json_name = f"loso_spdnet{ds_tag}{ea_tag}{cov_tag}{dims_tag}{fs_tag}{pretrain_tag}{seed_tag}_summary.json"
     json_path = output_dir / json_name
     with open(json_path, "w") as f:
         json.dump(summary, f, indent=2)

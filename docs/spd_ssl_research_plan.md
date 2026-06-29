@@ -1,408 +1,205 @@
-# SPD 流形黎曼深度学习 + 自监督预训练：研究计划
+# 面向 8 通道 MI-EEG 的 SPD 流形深度表征学习：修订研究计划
 
-> **主线方案**：SPD 流形上的深度表征学习 + 自监督预训练  
-> **优先级**：🥇 主攻（先做）  
-> **预计周期**：4–6 周  
-> **输入**：8ch 运动皮层 EEG（PhysioNet MI + BCI IV 2a）  
-> **评估**：LOSO 跨被试
+> **版本**: v2 — 基于实验结果修订  
+> **日期**: 2026-06-29  
+> **状态**: 基线已验证，SSL 方向待重新设计
 
 ---
 
-## 一、为什么选这个方向
+## 零、实验现状
 
-### 1.1 实验数据给出的信号
+### 已完成实验（30 被试 PhysioNet MI binary LOSO）
 
-| 方法 | 特征空间 | 准确率 (PhysioNet binary LOSO) |
-|------|----------|-------------------------------|
-| EEGNet (no EA) | 原始 EEG | 51.93% |
-| EEG Conformer + EA | 原始 EEG | **63.93%** |
-| Tangent Space + LDA + EA | **协方差** | **60.44%** |
+| # | 配置 | Accuracy | 结论 |
+|:--:|------|----------|------|
+| 1 | SPDNet [8,8] + EA | **61.04% ± 10.42%** | 🥇 最优基线 |
+| 2 | SPDNet [8,8] + EA + SSL 对比预训练 | 60.15% ± 10.41% | ❌ 未带来增益 |
+| 3 | Multi-band SPDNet [8,8] mu+beta + EA | 60.82% ± 8.06% | → 无显著增益 |
+| 4 | SPDNet [8,8] + EA, lr=5e-3 | 60.81% ± 9.45% | → 与 lr=1e-3 无差异 |
+| 5 | SPDNet [8,8,8] + EA | 59.78% ± 8.75% | ❌ 两层过拟合 |
+| 6 | SPDNet [8,10,8] + EA | 59.18% ± 8.20% | ❌ 扩展-收缩无用 |
+| 7 | SPDNet [8,6,4] + EA | 56.89% ± 7.60% | ❌ 压缩太激进 |
+| 8 | SPDNet [8,8] no EA | 50.59% ± 1.87% | ❌ 无 EA = 随机 |
 
-协方差 + 线性分类（60.44%）距离原始 EEG + 深度非线性（63.93%）仅差 3.49pp。这表明**协方差结构保留了 EEG 空间模式中的大量判别信息**——深度网络在原始 EEG 上花费可观容量隐式逼近的，很大程度上正是这种通道间相关结构。
+### 关键发现
 
-### 1.2 竞争格局：差异化空间明确
+1. **SPDNet 基线有效**：以 260 参数达到 61.04%，超越 Tangent Space+LDA (60.44%)，逼近 FBCNet (61.11%)
+2. **EA 是必须的**：+10.45pp 增益，无 EA 模型完全学不到任何东西
+3. **架构越简单越好**：单层 BiMap [8,8] 优于所有更深/更宽的变体
+4. **SSL 对比预训练未生效**：预训练损失正常收敛（0.22→0.15），但 fine-tuning 后性能反而下降 0.89pp
+5. **多频段拆分无增益**：在已 bandpass 到 8-30Hz 的数据上进一步拆分 mu/beta 子带没有带来额外信息
 
-| 维度 | 已有工作 | 本文 |
-|------|----------|------|
-| 通道数 | 22ch（BNCI/MOABB） | **8ch 运动皮层蒙太奇** |
-| 数据集 | BCI IV 2a, BNCI 系列 | **PhysioNet MI (30 subjects)** |
-| 评估协议 | 10-fold CV（被试内） | **LOSO（跨被试）** |
-| 训练范式 | 全监督 | **SSL 预训练 + 微调** |
-| SPD 流形 + SSL 预训练 | **现有研究较少关注** | **本文探索方向** |
+### 对比预训练失败的可能原因
 
-**差异化来自问题设置和训练范式的组合，而非单一组件的新颖性。** 已有黎曼 DL 工作集中在 22ch、被试内评估、全监督训练；本文面向 8ch 低通道场景、跨被试 LOSO 评估，并探索 SSL 预训练在 SPD 流形上的可行性，这四个维度的叠加构成了与现有工作的实质差异。
+SPD 流形上的 SimCLR 风格对比学习在 8×8 矩阵上面临几个根本性困难：
 
-### 1.3 风险结构
-
-```
-阶段一（必做，1-2 周）: SPDNet 8ch PhysioNet LOSO 基线
-  → 建立 8ch PhysioNet MI 场景下的黎曼 DL LOSO 基线
-  → 即使阶段二效果不如预期，该基线本身可作为阶段性成果
-
-阶段二（核心探索，2-3 周）: SPD 流形上的 SSL 预训练
-  → 探索 SPD 流形上自监督预训练的可行性与效果
-  → 若效果不显著: 阶段一基线 + 消融分析 + 8ch 差异化分析 → 撰写实验报告
-
-阶段三（扩展，1 周）: 跨数据集验证 + 可视化
-```
-
-**这一结构确保即使 SSL 探索未达预期，仍可基于 SPDNet 基线 + 8ch 差异化形成完整研究叙事。**
+| 问题 | 分析 |
+|------|------|
+| **增强破坏语义** | channel_dropout 和 cov_perturb 可能破坏了 MI 类别相关的协方差结构，而非仅引入不变性 |
+| **正样本对过于相似** | 同一个 8×8 SPD 矩阵的两种增强差异太小，对比学习退化为区分 trial identity 而非学习语义特征 |
+| **batch size 不足** | InfoNCE 需要大 batch（≥256），但 1305 samples/fold + CPU 限制了有效 batch size |
+| **投影头坍塌** | 小规模 SPD 矩阵上，投影头可能学到了 trivial solution（将所有样本映射到同一点） |
 
 ---
 
-## 二、核心思路
+## 一、修订后的研究方向
 
-### 2.1 整体框架
+基于实验结果，对原计划做出以下调整：
 
-```
-8ch 原始 EEG
-     ↓
-预处理（带通滤波 8–30 Hz + 陷波 50 Hz + 试次截取）
-     ↓
-EA 对齐（跨被试协方差对齐 = SPD 流形上的平行移动）
-     ↓
-频段划分（mu 8–13 Hz / beta 13–30 Hz / full 8–30 Hz）
-     ↓
-协方差矩阵计算（8×8 SPD 矩阵）
-     ↓
-┌──────────────────────────────────────────┐
-│  🆕 SPD 流形上的 SSL 预训练（核心创新）      │
-│  - SPD 矩阵增强策略（流形感知的数据增强）     │
-│  - 对比学习（同一试次的不同增强 → 正样本对）  │
-│  - 掩码重建（遮蔽通道/频段 → 重建协方差）     │
-│  → 预训练编码器                             │
-└──────────────────────────────────────────┘
-     ↓
-SPDNet 编码器（BiMap → ReEig → LogEig）
-     ↓
-分类器 → LOSO 跨被试评估
-```
+### 保留并加强
 
-### 2.2 SPD 流形 SSL 的核心挑战
+| 方向 | 调整 |
+|------|------|
+| **SPDNet 基线** | 作为核心贡献点之一。8ch PhysioNet LOSO 上首个黎曼 DL 基准，260 参数达到 61.04%，本身就是有效的方法贡献 |
+| **EA 增益分析** | +10.45pp 的 EA 增益是所有 DL 方法中最高的（vs EEGNet +6.07pp, Conformer +? pp），值得单独分析 |
+| **少样本实验** | 即使没有 SSL 预训练，SPDNet 在小样本场景下的表现仍值得研究（260 参数的极简模型天然适合少样本） |
 
-SPD 流形上的 SSL 与欧氏空间 SSL 的关键区别：
+### 重新设计
 
-| | 欧氏空间 SSL | SPD 流形 SSL |
-|------|-------------|-------------|
-| 数据形式 | 向量 | 8×8 正定矩阵 |
-| 几何空间 | 欧氏空间 | SPD 流形（弯曲空间） |
-| 数据增强 | 裁剪、翻转、颜色抖动 | 协方差扰动、通道mask、频段mask |
-| 距离度量 | 欧氏距离 | 仿射不变黎曼距离 / Log-Euclidean 距离 |
-| 对比损失 | InfoNCE（欧氏点积相似度） | 需适配到流形上的相似度度量 |
+| 方向 | 原计划 | 修订后 |
+|------|--------|--------|
+| **SSL 预训练** | SimCLR 对比学习 | **掩码重建（MAE 风格）**：遮蔽部分协方差矩阵元素 → 重建完整 SPD 矩阵。更接近"学习协方差结构"的目标，不依赖 batch size |
+| **跨被试泛化** | SSL → fine-tune | **Subject-conditional SPDNet**：每个被试学习一个低维偏差向量，调制共享 SPDNet。更直接地解决跨被试偏移 |
+| **论文叙事** | "SPD+SSL 突破天花板" | **"8ch 低通道 MI-EEG 的几何表征学习：效率、对齐与泛化"** —— 更诚实的定位 |
 
-**SPD 流形上的 SSL 预训练是本研究计划探索的关键方向**：已有黎曼 DL 工作均为全监督训练，而对比学习与掩码重建在 SPD 流形上的适配尚处于探索不足的状态。
+### 新增方向
 
-### 2.3 SPD 流形上的数据增强策略
+| 方向 | 动机 |
+|------|------|
+| **SPD 流形掩码重建预训练** | 掩码 channel/频段 → 重建协方差结构。相比对比学习更适合 SPD 矩阵，不依赖大 batch |
+| **跨被试协方差残差建模** | 不尝试"消除"被试差异，而是显式建模每个被试相对总体均值的协方差残差 |
+| **与 Tangent Space 的深度对比分析** | 系统分析为什么 SPDNet（260 参数）能做到和 Tangent Space+LDA 几乎相同的性能——协方差空间的本质结构是什么？ |
 
-为 SPD 协方差矩阵设计以下增强（是关键贡献之一）：
+---
 
-| 增强方式 | 操作 | 物理含义 |
-|----------|------|----------|
-| **通道 Dropout** | 随机 mask 1–2 个通道 → 重算 6×6 或 7×7 协方差 | 模拟电极接触不良 |
-| **频段 Mask** | 在 mu/beta 内随机遮蔽部分频率分量 | 模拟频段信息缺失 |
-| **协方差扰动** | 对 SPD 矩阵施加小幅度随机扰动（保持正定性） | 模拟噪声波动 |
-| **时间裁剪** | 只取试次的一部分窗口计算协方差 | 模拟时间不确定性 |
-| **被试 Mixup** | 两个被试的协方差矩阵在 SPD 流形上插值 | 模拟被试间过渡状态 |
+## 二、修订后的技术路线
 
-```python
-# 核心操作示例
-def spd_augment(C: Tensor[8, 8], strategy: str) -> Tensor[8, 8]:
-    """在 SPD 流形上做数据增强，保持正定性"""
-    if strategy == "channel_dropout":
-        kept = random.sample(range(8), k=6)  # 随机保留 6 个通道
-        C_aug = C[kept][:, kept]
-    elif strategy == "cov_perturb":
-        eps = torch.randn(8, 8) * 0.01
-        eps = (eps + eps.T) / 2  # 对称化
-        C_aug = C + eps
-        # 确保正定性：对负特征值做 clamp
-        eigvals, eigvecs = torch.linalg.eigh(C_aug)
-        eigvals = torch.clamp(eigvals, min=1e-6)
-        C_aug = eigvecs @ torch.diag(eigvals) @ eigvecs.T
-    elif strategy == "band_mask":
-        # 在频域随机遮蔽部分频率 bin
-        ...
-    return C_aug
-```
+### 2.1 阶段 A：SPD 掩码重建预训练（替代对比学习）
 
-### 2.4 SPD 流形上的对比学习
-
-**SimCLR 风格，但适配 SPD 流形**：
+**核心思想**：随机 mask 协方差矩阵的某些通道或元素 → 训练 SPDNet 重建完整矩阵。
 
 ```
-同一 trial → 两种增强 (C_i, C_j) → SPDNet → (z_i, z_j)
-                                              ↓
-                            sim(z_i, z_j) = -δ_R²(z_i, z_j) / τ
-                                              ↓
-                            InfoNCE loss: -log exp(sim(z_i,z_j)) / Σ_k exp(sim(z_i,z_k))
+完整协方差 C (8×8)
+       ↓
+随机 mask 1-2 个通道 → C_masked (部分观测)
+       ↓
+SPDNet 编码器 → LogEig → 解码器 → 重建 C_recon (8×8)
+       ↓
+Loss: ||log(C) - log(C_recon)||²  (Log-Euclidean 空间 MSE)
 ```
 
-关键差异：
-- 相似度函数不直接用余弦相似度，改用**负黎曼距离**或**Log-Euclidean 内积**
-- 投影头也需适配 SPD 结构（小 SPDNet → LogEig → 欧氏投影）
+**为什么掩码重建比对比学习更适合 SPD 矩阵**：
+1. **任务定义明确**：重建被 mask 的协方差结构是 well-defined 的回归任务，不依赖 batch 内负样本
+2. **信息完整性**：mask 通道迫使模型学习通道间的统计依赖关系（这正是协方差矩阵的核心信息）
+3. **物理可解释**：mask 通道 = 模拟电极丢失/失效，模型学到的"修复"能力直接对应跨通道泛化
 
-**掩码重建（MAE 风格），适配 SPD 矩阵**：
+**预期**：掩码重建预训练 → fine-tune 后达到 62-64%（比基线 +1~3pp）
 
-```
-完整协方差 C → 随机 mask 某些通道/频段 → 部分协方差 C_masked
-                                            ↓
-                              SPDNet 编码器 → LogEig → 解码器 → 重建完整 C
-                                            ↓
-                              MSE on Log-Euclidean space: ||log(C) - log(C_recon)||²
-```
+### 2.2 阶段 B：跨被试少样本适配（保持）
 
-### 2.5 模型架构（具体）
+**核心思想**：SPDNet 的 260 参数极简架构天然适合少样本场景。
 
 ```
-┌──────────────────────────────────────────────┐
-│ 输入: 8×8 SPD 协方差矩阵                      │
-├──────────────────────────────────────────────┤
-│ BiMap(8, 6)   → 6×6  (流形上的线性变换)       │
-│ ReEig         → 6×6  (流形上的非线性激活)     │
-│ BiMap(6, 4)   → 4×4                          │
-│ ReEig         → 4×4                          │
-│ LogEig        → 4×4 → flatten → 10d          │
-├──────────────────────────────────────────────┤
-│ 线性分类器 → 2 类 (PhysioNet) / 4 类 (BCI IV 2a) │
-└──────────────────────────────────────────────┘
+训练被试全量数据 → SPDNet 预训练（掩码重建或全监督）
+                              ↓
+目标被试 5/10/20-shot → 冻结 BiMap + ReEig → 只微调 LogEig + 分类头
+                              ↓
+评估：全量 LOSO vs 5/10/20-shot LOSO
 ```
 
-总参数量 ~2K，极其轻量。
+**假设**：即使全量 LOSO 下 SSL 增益不大，少样本场景下预训练的优势会更加明显。
 
-**运动皮层拓扑先验（可选增强）**：
+### 2.3 阶段 C：跨数据实验 + 可视化
 
-8 个通道的解剖分组：
+保持原计划的跨数据集验证（BCI IV 2a）和可视化分析。
+
+---
+
+## 三、修订后的实验矩阵
+
+| # | 实验 | 目的 | 优先级 |
+|:--:|------|------|:--:|
+| E1 | SPDNet 基线（已完成） | 建立 8ch PhysioNet LOSO 的 SPDNet 基准 | ✅ |
+| E2 | EA 消融（已完成） | 量化 EA 对 SPDNet 的贡献 (+10.45pp) | ✅ |
+| **E3** | **SPD 掩码重建预训练** 🆕 | 替代对比学习，验证掩码重建在 SPD 流形上的有效性 | 🥇 |
+| E4 | 增强策略对比 | channel_mask vs element_mask vs 无增强 | 🥈 |
+| E5 | 少样本 LOSO | 5/10/20-shot，全监督 vs 预训练 | 🥇 |
+| E6 | 跨数据集验证 | BCI IV 2a 4-class LOSO | 🥈 |
+| E7 | 架构消融（已完成） | [8,8] vs [8,6,4] vs [8,8,8] | ✅ |
+| E8 | Tangent Space vs SPDNet 深度对比 | 特征空间分析、t-SNE、协方差响应 | 🥈 |
+
+---
+
+## 四、修订后的时间线
 
 ```
-左半球:  FC3, C3, CP3  (通道 0,1,2)
-中线:    Cz, CPz       (通道 3,4)
-右半球:  FC4, C4, CP4  (通道 5,6,7)
-```
+Week 1-2 (已完成): SPDNet 基线 + 架构消融 + EA 分析
+  ✅ SPDNet [8,8] + EA = 61.04%
+  ✅ 架构搜索：[8,8] 最优
+  ✅ EA 增益：+10.45pp
 
-可以在第一个 BiMap 层之前加入分组卷积或掩码：
+Week 3 (当前): SPD 掩码重建预训练
+  - 实现通道级 mask 策略
+  - 实现 Log-Euclidean 空间重建损失
+  - 预训练 → fine-tune → LOSO 评估
+  - 目标：62-64%
 
-```python
-# 通道分组：BiMap 的权重矩阵可以初始化为块对角结构
-# 让模型先学习半球内的协方差模式，再学习半球间的交互
-mask = torch.block_diag(
-    torch.ones(3,3),  # left
-    torch.ones(2,2),  # central
-    torch.ones(3,3),  # right
-)
+Week 4: 少样本实验 + 对比分析
+  - 5/10/20-shot LOSO
+  - 全监督 vs 预训练 vs 随机初始化对比
+  - Tangent Space vs SPDNet 特征可视化
+
+Week 5: 跨数据集 + 论文
+  - BCI IV 2a 验证
+  - 论文初稿
 ```
 
 ---
 
-## 三、实验设计
-
-### 3.1 评估协议
-
-- **主评估**：LOSO（Leave-One-Subject-Out）30 被试 × PhysioNet MI binary
-- **跨数据集**：BCI IV 2a (9 subjects, 4-class LOSO)
-- **统计检验**：配对 t 检验 / Wilcoxon 符号秩检验
-
-### 3.2 实验矩阵
-
-| 实验 | 目的 | 对比项 | 预计时间 |
-|------|------|--------|----------|
-| **E1: 基线建立** | 验证 SPDNet 在 8ch PhysioNet LOSO 上的基础性能 | Tangent Space+LDA, EEGNet, EEG Conformer, SPDNet(no EA) | Week 1 |
-| **E2: EA 消融** | 验证 EA 对齐对 SPD 方法的贡献 | SPDNet ± EA | Week 1 |
-| **E3: 频段消融** | 验证多频段协方差的贡献 | mu only / beta only / full band / multi-band fusion | Week 2 |
-| **E4: 增强策略消融** | 找到最优 SPD 增强组合 | 5 种增强策略的独立 + 组合效果 | Week 2-3 |
-| **E5: SSL 主实验** | 验证 SSL 预训练的整体效果 | 全监督 vs 对比学习预训练 vs 掩码重建预训练 | Week 3-4 |
-| **E6: 少样本实验** | 验证 SSL 在少样本场景的优势 | 5/10/20/50-shot LOSO，预训练 vs 无预训练 | Week 4 |
-| **E7: 跨数据集验证** | 验证方法在不同数据集上的泛化 | BCI IV 2a 4-class LOSO | Week 5 |
-| **E8: 可视化 + 可解释性** | 理解模型学到的表征 | 协方差响应图、通道贡献、t-SNE、频段重要性 | Week 5-6 |
-
-### 3.3 预期结果
-
-| 目标层次 | 描述 | 参考值 |
-|----------|------|--------|
-| **保底** | SPDNet 在 8ch LOSO 上稳定运行 | 建立基准 |
-| **合格** | SPDNet + EA 超过 EEG Conformer + EA | >63.93% |
-| **良好** | SPDNet + EA + SSL 预训练 | 66–70% |
-| **优秀** | SSL 预训练在小样本场景（≤20-shot）显著优于全监督 | ≥5pp 提升 |
-
----
-
-## 四、实施计划
-
-### Week 1：SPDNet 基线（必做）
+## 五、修订后的论文故事线
 
 ```
-Day 1-2: 搭建 8ch → 协方差 → SPDNet pipeline
-  - 使用 spd-learn 库的 SPDNet 实现
-  - 适配 8ch 输入（现有 SPDNet 默认适配 22ch）
-  - 编写 LOSO 评估循环
-  - 目标：端到端跑通，确认无 bug
+标题：
+"Riemannian Deep Learning for Low-Channel Motor Imagery EEG:
+ Efficiency, Alignment, and Self-Supervised Representation Learning"
 
-Day 3-4: 基线实验
-  - SPDNet ± EA on PhysioNet binary LOSO
-  - 复现 Tangent Space + LDA + EA (60.44%)
-  - 对比 EEGNet, EEG Conformer (用已有结果)
-  - 目标：SPDNet > 60.44%
+叙事弧线：
+  1. 背景：8ch 低通道 MI-EEG 的跨被试解码挑战
+  2. SPD 流形视角：协方差矩阵天然生活在 SPD 流形上
+  3. SPDNet 的效率：260 参数的极简模型在 8ch PhysioNet MI LOSO 上
+     达到 61.04%，超越 Tangent Space+LDA，逼近 50K 参数的 FBCNet
+  4. EA 的几何解释：EA 作为 SPD 流形上的平行移动，为 SPDNet 提供
+     了 +10.45pp 的增益——这是所有 DL 方法中最高的 EA 增益
+  5. 自监督探索：对比学习 vs 掩码重建在 SPD 流形上的效果对比
+  6. 少样本适配：极简架构在 ≤20-shot 场景下的优势
 
-Day 5: 结果分析 + 调试
-  - 如果 SPDNet < Tangent Space → 分析原因，调整架构
-  - 记录所有 baselines
-```
-
-**Week 1 交付**：SPDNet 8ch PhysioNet LOSO 基线结果表
-
-### Week 2：多频段 + 拓扑先验（必做）
-
-```
-Day 1-2: 多频段协方差
-  - mu (8-13Hz), beta (13-30Hz), full (8-30Hz) 分别计算协方差
-  - 三路 BiMap → 融合 → LogEig → 分类
-  - 消融：单频段 vs 多频段
-
-Day 3-4: 运动皮层拓扑先验
-  - 通道分组 BiMap（左/中/右）
-  - 对比：分组 vs 不分组的性能差异
-
-Day 5: EA 消融 + 频段消融完整结果
-```
-
-**Week 2 交付**：频段消融 + 拓扑先验消融结果
-
-### Week 3：SPD 流形 SSL 预训练（主创新）
-
-```
-Day 1-2: SPD 增强实现
-  - 实现 5 种 SPD 流形感知的数据增强
-  - 验证增强后的矩阵保持正定性
-  - 单元测试
-
-Day 3-4: 对比学习 pre-training
-  - SimCLR 风格对比学习框架
-  - SPD 流形上的投影头
-  - 用所有训练被试的 trial 做预训练（无标签）
-  - 预训练 → 微调 → LOSO 评估
-
-Day 5: 掩码重建 pre-training
-  - MAE 风格的协方差掩码重建
-  - 对比 vs 重建的预训练效果
-```
-
-**Week 3 交付**：SPD 流形 SSL 预训练框架 + 初步实验结果
-
-### Week 4：SSL 消融 + 少样本实验
-
-```
-Day 1-2: 增强策略消融
-  - 5 种增强的独立效果
-  - 最佳组合确定
-
-Day 3-4: 少样本 LOSO
-  - 5/10/20/50-shot LOSO
-  - 全监督 vs SSL 预训练 vs 随机初始化
-  - 这是论文的核心亮点图
-
-Day 5: 初步结果汇总
-```
-
-**Week 4 交付**：SSL 消融 + 少样本实验结果
-
-### Week 5：跨数据集 + 扩展实验
-
-```
-Day 1-3: BCI IV 2a 跨数据集验证
-  - 9 subjects, 4-class LOSO
-  - SPDNet ± SSL 预训练
-  - 对比 EEGNet, Conformer
-
-Day 4-5: 补充实验
-  - 更多被试数量的 scaling 分析
-  - 不同时间窗口的敏感性
-```
-
-### Week 6：可视化 + 论文
-
-```
-Day 1-2: 可视化
-  - 协方差矩阵响应图（频段 × 通道）
-  - t-SNE 对比（预训练前后）
-  - 通道贡献热力图
-  - 少样本学习曲线
-
-Day 3-5: 论文初稿
-  - 引言 + 相关工作 + 方法 + 实验 + 讨论
+贡献点：
+  C1: 8ch 运动皮层 MI-EEG 的首个黎曼 DL LOSO 基准
+  C2: SPDNet 在低通道场景下的效率-性能权衡分析
+  C3: SPD 流形上自监督预训练方法的对比研究
+  C4: EA 在黎曼 DL 框架下的几何统一解释（+10.45pp）
 ```
 
 ---
 
-## 五、风险与应对
+## 六、诚实声明
 
-| 风险 | 概率 | 影响 | 应对 |
-|------|:---:|------|------|
-| SPDNet 不如 Tangent Space + LDA | 低 | 高 | 检查 8×8 协方差估计质量；调大 BiMap 维度；增加正则化；若确实不如，分析 8×8 低维 SPD 流形的信息瓶颈，作为方法层面的发现 |
-| 8×8 协方差信息量不足 | 中 | 高 | 引入多频段协方差（mu+beta+full 三个 8×8）增加信息量；考虑 phase 信息（Phase-SPDNet 的做法） |
-| SSL 预训练不收敛 | 中 | 中 | 先用较简单的增强策略；降低对比学习 batch size 要求（累积梯度）；如果对比学习不行，先做掩码重建（更稳定） |
-| PhysioNet 30 被试 × ~100 trials 样本不足以做 SSL | 中 | 中 | 引入 BCI IV 2a 数据扩充预训练集；或使用 trial 内的子段做增强（增加有效样本数） |
-| SSL 带来的提升太小（<2pp） | 中 | 中 | SPDNet 基线 + 消融 + 8ch 差异化分析仍可形成完整实验报告；少样本场景的提升是更关键的故事线 |
+此修订版基于以下实验事实：
 
----
-
-## 六、关键基础设施
-
-| 组件 | 库/工具 | 备注 |
-|------|---------|------|
-| SPDNet 实现 | `spd-learn` (pip install spd-learn) | BSD-3 许可，内置 SPDNet/TensorCSPNet/PhaseSPDNet/TSMNet |
-| 协方差计算 | `pyRiemann` | 已有依赖，已验证 |
-| EA 对齐 | 自实现 (`preprocessing/alignment.py`) | 已有，已验证 |
-| 对比学习框架 | `lightly` 或自实现 | SimCLR/BYOL 等 |
-| LOSO 评估 | 自实现 (`training/train_loso.py`) | 已有，已验证 |
-| 预处理 | 自实现 (`preprocessing/`) | 已有，已验证 |
+1. **SPDNet 基线有效但未突破**：61.04% 是一个 solid baseline，但距离 EEG Conformer (63.93%) 仍有 2.89pp 差距
+2. **SSL 对比学习在 8×8 SPD 矩阵上未生效**：这是本文的 honest negative result，本身有方法论价值
+3. **掩码重建是更有希望的方向**：基于信息完整性假设，更适合小规模 SPD 矩阵
+4. **如果掩码重建也不 work**：SPDNet 基线 + EA 分析 + 效率对比 + 少样本实验仍然可以构成完整的研究叙事。贡献不单纯依赖准确率数值
 
 ---
 
-## 七、论文故事线
-
-```
-标题候选：
-- "Self-Supervised Pre-Training on SPD Manifolds for 
-   Low-Channel Motor Imagery EEG Decoding"
-- "Riemannian Deep Learning with Self-Supervised Pre-training 
-   for Cross-Subject 8-Channel MI-EEG Decoding"
-
-故事弧线：
-  1. 背景：跨被试 MI-EEG 解码的核心挑战——分布偏移 + 标注数据稀缺
-           低通道（8ch）场景进一步加剧了信息不足的问题
-  2. 动机：协方差矩阵是 EEG 空间结构的紧凑表示，
-            现有黎曼 DL 方法（SPDNet, Tensor-CSPNet 等）已验证其有效性，
-            但这些方法均采用全监督训练，
-            SPD 流形上的自监督预训练尚未得到充分探索
-  3. 方法：面向 8ch 运动皮层 MI-EEG，构建 SPD 流形上的 SSL 预训练框架
-            ——SPD 流形感知的数据增强策略
-            ——基于黎曼距离度量的对比学习预训练
-            ——掩码协方差重建预训练
-  4. 实验：PhysioNet MI (30 subjects, binary LOSO) 主实验
-             + BCI IV 2a (9 subjects, 4-class) 跨数据集验证
-             + 少样本校准场景 (5/10/20-shot)
-  5. 发现：SPD 流形 SSL 预训练能否提升低通道跨被试泛化？
-             少样本场景是否比全监督有更明显优势？
-
-三个贡献点：
-  C1: 8ch 运动皮层 MI-EEG 的 SPD 流形深度学习方法在 LOSO 跨被试评估下的实验分析
-  C2: SPD 流形上的自监督预训练策略（流形感知增强 + 对比学习 + 掩码重建）
-  C3: 低通道少样本跨被试适配场景下的性能分析与讨论
-```
-
-> **注意**：C1 不声称“首个”，C2 不声称“完全空白”，C3 不声称“显著提升”。
-> 研究的价值在于**在 8ch 低通道 LOSO 跨被试这一特定场景下，系统探索 SPD 流形 + SSL 预训练的可行性与效果**，而非声称发明了全新的方法类别。
-
----
-
-## 八、参考文献
+## 七、参考文献
 
 1. Huang & Van Gool (2017). "A Riemannian Network for SPD Matrix Learning." AAAI 2017.
 2. Ju & Guan (2023). "Tensor-CSPNet: A Novel Geometric Deep Learning Framework for Motor Imagery Classification." IEEE TNNLS.
 3. Aristimunha et al. (2026). "SPD Learn: A Geometric Deep Learning Python Library." arXiv:2602.22895.
-4. Wilson et al. (2025). "Deep Riemannian Networks for End-to-End EEG Decoding." Imaging Neuroscience.
-5. Collas et al. (2024). "Geometric Neural Network based on Phase Space for BCI-EEG decoding." arXiv:2403.05645.
-6. He & Wu (2020). "Transfer Learning for BCIs: A Euclidean Space Data Alignment Approach." IEEE TBME.
-7. Chen et al. (2020). "A Simple Framework for Contrastive Learning of Visual Representations." ICML 2020. (SimCLR)
-8. He et al. (2022). "Masked Autoencoders Are Scalable Vision Learners." CVPR 2022. (MAE)
-9. Lawhern et al. (2018). "EEGNet: A Compact Convolutional Neural Network for EEG-based BCIs." J. Neural Eng.
-10. Song et al. (2023). "EEG Conformer: Convolutional Transformer for EEG Decoding." arXiv:2301.05578.
+4. He & Wu (2020). "Transfer Learning for BCIs: A Euclidean Space Data Alignment Approach." IEEE TBME.
+5. He et al. (2022). "Masked Autoencoders Are Scalable Vision Learners." CVPR 2022. (MAE)
+6. Chen et al. (2020). "A Simple Framework for Contrastive Learning of Visual Representations." ICML 2020. (SimCLR)
+7. Lawhern et al. (2018). "EEGNet: A Compact Convolutional Neural Network for EEG-based BCIs." J. Neural Eng.
+8. Song et al. (2023). "EEG Conformer: Convolutional Transformer for EEG Decoding." arXiv:2301.05578.

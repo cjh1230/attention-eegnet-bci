@@ -105,8 +105,13 @@ class ReEig(nn.Module):
         -------
         C_out : (B, d, d)  SPD matrices with rectified eigenvalues.
         """
-        eigvals, eigvecs = torch.linalg.eigh(C)
+        # Use float64 for eigendecomposition for numerical stability
+        dtype_in = C.dtype
+        C64 = C.to(torch.float64)
+        eigvals, eigvecs = torch.linalg.eigh(C64)
         eigvals = torch.clamp(eigvals, min=self.eps)
+        eigvals = eigvals.to(dtype_in)
+        eigvecs = eigvecs.to(dtype_in)
         # Reconstruct: C_out = U @ diag(clamped_eigvals) @ U.T
         C_out = torch.matmul(
             eigvecs,
@@ -142,8 +147,13 @@ class LogEig(nn.Module):
         -------
         C_log : (B, d, d)  Matrix logarithms (symmetric, in tangent space).
         """
-        eigvals, eigvecs = torch.linalg.eigh(C)
+        # Use float64 for eigendecomposition for numerical stability
+        dtype_in = C.dtype
+        C64 = C.to(torch.float64)
+        eigvals, eigvecs = torch.linalg.eigh(C64)
         eigvals = torch.clamp(eigvals, min=self.eps)
+        eigvals = eigvals.to(dtype_in)
+        eigvecs = eigvecs.to(dtype_in)
         log_eigvals = torch.log(eigvals)
         C_log = torch.matmul(
             eigvecs,
@@ -291,3 +301,141 @@ def create_spdnet(
         bimap_dims=bimap_dims,
         dropout=dropout,
     )
+
+
+# ---------------------------------------------------------------------------
+# SPD Decoder for masked reconstruction
+# ---------------------------------------------------------------------------
+
+
+class SPDDecoder(nn.Module):
+    """Decoder that reconstructs log-covariance from LogEig features.
+
+    Takes upper-triangular elements from LogEig output of a masked
+    covariance matrix and predicts the upper-triangular elements of
+    the original (unmasked) log-covariance matrix.
+    """
+
+    def __init__(self, feat_dim: int, hidden_dim: int = 64):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(feat_dim, hidden_dim),
+            nn.BatchNorm1d(hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.BatchNorm1d(hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, feat_dim),
+        )
+
+    def forward(self, z: torch.Tensor) -> torch.Tensor:
+        """Reconstruct log-covariance upper-tri from encoded features.
+
+        Parameters
+        ----------
+        z : (B, feat_dim)  LogEig features from masked input.
+
+        Returns
+        -------
+        recon : (B, feat_dim)  Reconstructed log-cov upper-tri.
+        """
+        return self.net(z)
+
+
+# ---------------------------------------------------------------------------
+# Multi-band SPDNet
+# ---------------------------------------------------------------------------
+
+
+class MultiBandSPDNet(nn.Module):
+    """Multi-band SPDNet for MI-EEG with separate per-band SPDNet branches.
+
+    Each frequency band gets its own SPDNet branch (shared or separate weights).
+    Features from all bands are concatenated after LogEig and fed to a single
+    classifier.
+
+    Parameters
+    ----------
+    n_bands : int  Number of frequency bands.
+    n_channels : int  Number of EEG channels.
+    n_classes : int  Number of output classes.
+    bimap_dims : list[int]  BiMap dims for each branch.
+    dropout : float
+    share_branches : bool  If True, all bands share the same SPDNet weights.
+    """
+
+    def __init__(
+        self,
+        n_bands: int = 2,
+        n_channels: int = 8,
+        n_classes: int = 2,
+        bimap_dims: list[int] | None = None,
+        dropout: float = 0.3,
+        share_branches: bool = True,
+    ):
+        super().__init__()
+
+        if bimap_dims is None:
+            bimap_dims = [n_channels, n_channels]
+
+        self.n_bands = n_bands
+        self.share_branches = share_branches
+        d_last = bimap_dims[-1]
+
+        if share_branches:
+            # Single branch applied to each band
+            self.branch = SPDNetModel(
+                n_classes=n_classes,
+                bimap_dims=bimap_dims,
+                dropout=0.0,  # dropout applied after concat
+            )
+            self.branches = None
+        else:
+            # Separate branch per band
+            self.branch = None
+            self.branches = nn.ModuleList([
+                SPDNetModel(
+                    n_classes=n_classes,
+                    bimap_dims=bimap_dims,
+                    dropout=0.0,
+                )
+                for _ in range(n_bands)
+            ])
+
+        # Feature dim: n_bands × d_last × (d_last+1) / 2
+        feat_dim = n_bands * d_last * (d_last + 1) // 2
+        self.dropout = nn.Dropout(dropout)
+        self.classifier = nn.Linear(feat_dim, n_classes)
+
+    def forward(
+        self, C_bands: dict[str, torch.Tensor]
+    ) -> torch.Tensor:
+        """Forward pass.
+
+        Parameters
+        ----------
+        C_bands : dict[str, (B, C, C)]  Per-band SPD covariance matrices.
+
+        Returns
+        -------
+        logits : (B, n_classes)
+        """
+        features = []
+        for i, (band_name, C) in enumerate(C_bands.items()):
+            if self.share_branches:
+                # Use shared branch, but only pass through spd_blocks + log_eig
+                out = self.branch.spd_blocks(C)
+                out = self.branch.log_eig(out)
+            else:
+                out = self.branches[i].spd_blocks(C)
+                out = self.branches[i].log_eig(out)
+
+            d = out.shape[-1]
+            idx = self.branch._get_triu_idx(d, out.device) if self.share_branches else \
+                  self.branches[i]._get_triu_idx(d, out.device)
+            feats = out[:, idx[0], idx[1]]
+            features.append(feats)
+
+        all_feats = torch.cat(features, dim=-1)
+        all_feats = self.dropout(all_feats)
+        return self.classifier(all_feats)
