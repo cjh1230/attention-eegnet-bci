@@ -24,6 +24,7 @@ Reference:
 import argparse
 import csv
 import json
+import random
 import sys
 from pathlib import Path
 
@@ -715,8 +716,12 @@ def main():
     print(f"Device: {device}")
 
     # ── Seed ─────────────────────────────────────────────────────────────
-    torch.manual_seed(args.seed)
+    random.seed(args.seed)
     np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
     # ── Load data ────────────────────────────────────────────────────────
     subjects = load_per_subject_data(args.data_dir, args.n_subjects)

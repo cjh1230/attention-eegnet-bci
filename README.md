@@ -134,7 +134,7 @@ EA 增益**并非纯架构属性**，还受数据集特征调节：
 | EEGNet | +6.07pp | **-1.54pp** ⚠️ |
 | EEG-TCNet | +1.85pp | +0.45pp |
 | EEG-Conformer | +2.60pp | +0.05pp |
-| FBCNet | +11.41pp | ⏳ |
+| FBCNet | +11.41pp | **+1.35pp** |
 
 BCI IV 2a（9 subjects, 576 trials/subject, 4-class）上 EA 增益几乎为零甚至为负。PhysioNet（30 subjects, ~45 trials/subject）被试间变异性更大，EA 收益更显著。
 

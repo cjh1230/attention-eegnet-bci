@@ -25,6 +25,7 @@ import argparse
 import copy
 import csv
 import json
+import random
 import sys
 from pathlib import Path
 
@@ -75,6 +76,7 @@ def train_on_subjects(
     batch_size: int,
     lr: float,
     augment: bool = False,
+    seed: int = 42,
     verbose: bool = False,
 ):
     """Train a model on a list of subjects' data. Returns trained model."""
@@ -84,7 +86,7 @@ def train_on_subjects(
 
     if augment:
         from preprocessing.augment import augment_dataset
-        X_all, y_all = augment_dataset(X_all, y_all, factor=2)
+        X_all, y_all = augment_dataset(X_all, y_all, factor=2, seed=seed)
         print(f"  Augmented: X={X_all.shape}, y={y_all.shape}")
 
     n_channels = X_all.shape[1]
@@ -101,7 +103,8 @@ def train_on_subjects(
         torch.from_numpy(X_all).float(),
         torch.from_numpy(y_all).long(),
     )
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
+                              generator=torch.Generator().manual_seed(seed))
 
     class_weights = compute_class_weight("balanced", classes=np.unique(y_all), y=y_all)
     class_weights = torch.tensor(class_weights, dtype=torch.float32, device=device)
@@ -164,6 +167,7 @@ def finetune_on_subject(
     device: str,
     lr: float = 1e-4,
     epochs: int = 20,
+    seed: int = 42,
 ) -> nn.Module:
     """
     Few-shot fine-tune on n_finetune_trials of the target subject.
@@ -196,7 +200,8 @@ def finetune_on_subject(
         torch.from_numpy(X_ft).float(),
         torch.from_numpy(y_ft).long(),
     )
-    ft_loader = DataLoader(ft_ds, batch_size=min(16, len(ft_indices)), shuffle=True)
+    ft_loader = DataLoader(ft_ds, batch_size=min(16, len(ft_indices)), shuffle=True,
+                           generator=torch.Generator().manual_seed(seed))
 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss()
@@ -244,11 +249,12 @@ def main():
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--model", default="eegnet",
-                        choices=["eegnet", "eegnet_spatiotemporal",
+                        choices=["eegnet", "eegnet_se", "eegnet_mhsa",
+                                 "eegnet_temporal", "eegnet_spatiotemporal",
                                  "fbcnet", "eeg_tcnet",
                                  "eeg_conformer", "fb_maa_eegnet",
                                  "maa_eegnet", "maa_eegnet_pre",
-                                 "fb_tcnet"])
+                                 "fb_tcnet", "spdnet"])
     parser.add_argument("--finetune", type=int, default=0,
                         help="Few-shot FT trials per class (0 = pure LOSO)")
     parser.add_argument("--finetune_sweep", type=str, default=None,
@@ -269,6 +275,8 @@ def main():
                              "(R_bar computed from training subjects only)")
     parser.add_argument("--augment", action="store_true",
                         help="Apply data augmentation (2x) to training data")
+    parser.add_argument("--seed", type=int, default=42,
+                        help="Random seed for reproducibility")
     args = parser.parse_args()
 
     if args.finetune > 0 and args.finetune_sweep:
@@ -277,6 +285,14 @@ def main():
         parser.error("--skip_train requires --checkpoint.")
     if args.checkpoint and not args.skip_train:
         print("WARNING: --checkpoint is only used with --skip_train; training will run normally.")
+
+    # ── Seed ────────────────────────────────────────────────────────────
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -338,7 +354,7 @@ def main():
             model = train_on_subjects(
                 train_subjs, args.model, device,
                 epochs=args.epochs, batch_size=args.batch_size, lr=args.lr,
-                augment=args.augment,
+                augment=args.augment, seed=args.seed,
             )
             model_type = args.model
         base_state = copy.deepcopy(model.state_dict())
@@ -358,6 +374,7 @@ def main():
                     _, metrics = finetune_on_subject(
                         model_ft, test_subj,
                         n_finetune_trials=ft_n, device=device,
+                        seed=args.seed,
                     )
                     print(f"  FT={ft_n:>2d}:  acc={metrics['accuracy']:.4f}  "
                           f"kappa={metrics['kappa']:.4f}")
@@ -372,7 +389,7 @@ def main():
             if args.finetune > 0:
                 model, metrics = finetune_on_subject(
                     model, test_subj, n_finetune_trials=args.finetune,
-                    device=device,
+                    device=device, seed=args.seed,
                 )
                 print(f"  FT+Test: acc={metrics['accuracy']:.4f}  "
                       f"kappa={metrics['kappa']:.4f}")
@@ -410,11 +427,12 @@ def main():
     ds_tag = f"_{args.dataset}" if args.dataset != "physionet_mi" else ""
     ft_tag = f"_ft{args.finetune}" if args.finetune > 0 else ""
     ea_tag = "_ea" if args.align else ""
+    seed_tag = f"_seed{args.seed}"
 
     if ft_sweep is not None:
         # ── FT Sweep CSV ────────────────────────────────────────────
         sweep_tag = f"_ftsweep{ea_tag}"
-        csv_path = output_dir / f"loso_{args.model}{ds_tag}{sweep_tag}.csv"
+        csv_path = output_dir / f"loso_{args.model}{ds_tag}{sweep_tag}{seed_tag}.csv"
 
         if per_subject_results:
             fieldnames = list(per_subject_results[0].keys())
@@ -442,6 +460,7 @@ def main():
             "n_subjects": len(subjects),
             "finetune_counts": ft_sweep,
             "align": args.align,
+            "seed": args.seed,
             "per_subject": per_subject_results,
         }
         print("\n" + "=" * 60)
@@ -453,11 +472,11 @@ def main():
             summary[f"ft{ft_n}_acc_mean"] = round(float(vals.mean()), 4)
             summary[f"ft{ft_n}_acc_std"] = round(float(vals.std()), 4)
             print(f"FT={ft_n:>2d}:  acc={vals.mean():.4f} ± {vals.std():.4f}")
-        json_path = output_dir / f"loso_{args.model}{ds_tag}{sweep_tag}_summary.json"
+        json_path = output_dir / f"loso_{args.model}{ds_tag}{sweep_tag}{seed_tag}_summary.json"
 
     else:
         # ── Single FT / pure LOSO CSV ───────────────────────────────
-        csv_path = output_dir / f"loso_{args.model}{ds_tag}{ft_tag}{ea_tag}.csv"
+        csv_path = output_dir / f"loso_{args.model}{ds_tag}{ft_tag}{ea_tag}{seed_tag}.csv"
         if per_subject_results:
             fieldnames = list(per_subject_results[0].keys())
             with open(csv_path, "w", newline="") as f:
@@ -473,6 +492,7 @@ def main():
             "n_subjects": len(subjects),
             "finetune_trials": args.finetune,
             "align": args.align,
+            "seed": args.seed,
             "accuracy_mean": round(float(accs.mean()), 4),
             "accuracy_std": round(float(accs.std()), 4),
             "kappa_mean": round(float(kappas.mean()), 4),
@@ -486,7 +506,7 @@ def main():
         print(f"Kappa:     mean={kappas.mean():.4f}  std={kappas.std():.4f}")
         print(f"Per-subject: {[f'{a:.3f}' for a in accs]}")
         print(f"Best/Worst: {accs.max():.4f} / {accs.min():.4f}")
-        json_path = output_dir / f"loso_{args.model}{ds_tag}{ft_tag}{ea_tag}_summary.json"
+        json_path = output_dir / f"loso_{args.model}{ds_tag}{ft_tag}{ea_tag}{seed_tag}_summary.json"
 
     with open(json_path, "w") as f:
         json.dump(summary, f, indent=2)

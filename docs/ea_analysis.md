@@ -165,7 +165,7 @@ X → Covariance Matrix (SPD) → Tangent Space Projection → LDA
 | EEGNet | 39.85% | 38.31% | **-1.54pp** ⚠️ | +6.07pp（反转！） |
 | EEG-TCNet | 40.33% | 40.78% | +0.45pp | +1.85pp（一致低增益） |
 | EEG-Conformer | 40.07% | 40.12% | +0.05pp | +2.60pp（一致低增益） |
-| FBCNet | ⏳ | ⏳ | — | +11.41pp |
+| FBCNet | 38.16% | 39.51% | **+1.35pp** | +11.41pp（PhysioNet 收益远大于 BCI IV 2a） |
 
 ### 双数据集对比
 
@@ -174,7 +174,7 @@ PhysioNet (30 subjects, ~45 trials/subject, binary):
   EA 增益显著: FBCNet +11.41 > EEGNet +6.07 > Conformer +2.60 > TCNet +1.85 > Tangent ±0
 
 BCI IV 2a (9 subjects, 576 trials/subject, 4-class):
-  EA 增益微小或负: EEGNet -1.54, TCNet +0.45, Conformer +0.05
+  EA 增益微小或负: EEGNet -1.54, TCNet +0.45, Conformer +0.05, FBCNet +1.35
 ```
 
 ### 解释: 修正后的 EA 增益模型
@@ -205,7 +205,7 @@ EA 增益 = f(架构内部归一化 × 数据集被试间变异性)
 **对架构设计的启示（更新版）**:
 1. 少被试、少 trial 的场景（如真实 BCI 校准）→ EA 至关重要
 2. 多被试、多 trial 的场景 → 内部归一化（BN/LN）已足够
-3. **EA 对 FBCNet 的 +11pp 增益可能也受 PhysioNet 特定数据特征影响，需在 BCI IV 2a 上验证**
+3. **EA 对 FBCNet 的 +11pp 增益（PhysioNet）在 BCI IV 2a 上缩减为 +1.35pp，验证了双因素模型：FBCNet 的高 EA 敏感性是"无内部归一化 × 高被试间变异"的交互结果**
 4. 跨数据集迁移时，不能假设 EA 增益可复现
 
 ---
