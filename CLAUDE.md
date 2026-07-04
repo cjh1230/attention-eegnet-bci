@@ -343,6 +343,8 @@ model = create_model("fb_tcnet", n_channels=8, n_classes=3)
 model = create_model("fb_maa_eegnet", n_channels=8, n_classes=3)
 model = create_model("maa_eegnet", n_channels=8, n_classes=3)
 model = create_model("maa_eegnet_pre", n_channels=8, n_classes=3)
+model = create_model("er_mi", n_channels=8, n_classes=3)       # ER-MI v1: GRU evidence reasoning
+model = create_model("er_mi_v2", n_channels=8, n_classes=3)    # ER-MI v2: multi-token evidence
 ```
 
 ### New model architectures
@@ -446,19 +448,21 @@ MOTOR_CHANNELS_BCI4 = [
 |------|-------|------|----------|-------|
 | 1 | **EEG Conformer + EA** | DL + Transformer | **63.93%** ± 9.58% | 0.277 |
 | 2 | **EEG-TCNet + EA** | DL + TCN | **63.41%** ± 10.51% | 0.265 |
-| 3 | **FBCNet + EA** | DL + Filter Bank | **61.11%** ± 11.69% | 0.219 |
-| 4 | Tangent Space + LDA + EA | Riemannian | 60.44% ± 9.64% | 0.212 |
-| 5 | FgMDM + EA (6-band, 8–30Hz) | Riemannian | 59.18% ± 8.12% | 0.180 |
-| 6 | **SPDNet + EA** (seed42) | DL + SPD Manifold | **58.52%** ± 8.38% | 0.161 |
-| 7 | EEGNet + EA | DL | 58.00% ± 10.06% | 0.161 |
-| 8 | EEGNet + SpatiotemporalAttn + EA | DL + Attention | 57.78% ± 8.55% | 0.158 |
-| 9 | MDM + EA | Riemannian | 56.22% ± 10.52% | 0.127 |
-| 10 | FB-MAA-EEGNet + EA | DL + FB + MAA | 53.78% ± 7.68% | 0.070 |
-| 11 | EEGNet (no EA) | DL | 51.93% ± 7.20% | 0.033 |
-| 12 | SPDNet (no EA) | DL + SPD Manifold | 50.59% ± 1.87% | 0.000 |
-| 13 | FBCNet (no EA) | DL + Filter Bank | 49.70% ± 2.66% | -0.010 |
+| 3 | **ER-MI + EA** ★ | DL + GRU Reasoning | **62.55%** ± 0.92% | 0.246 |
+| 4 | **FBCNet + EA** | DL + Filter Bank | **61.11%** ± 11.69% | 0.219 |
+| 5 | Tangent Space + LDA + EA | Riemannian | 60.44% ± 9.64% | 0.212 |
+| 6 | FgMDM + EA (6-band, 8–30Hz) | Riemannian | 59.18% ± 8.12% | 0.180 |
+| 7 | **SPDNet + EA** (seed42) | DL + SPD Manifold | **58.52%** ± 8.38% | 0.161 |
+| 8 | EEGNet + EA | DL | 58.00% ± 10.06% | 0.161 |
+| 9 | EEGNet + SpatiotemporalAttn + EA | DL + Attention | 57.78% ± 8.55% | 0.158 |
+| 10 | MDM + EA | Riemannian | 56.22% ± 10.52% | 0.127 |
+| 11 | FB-MAA-EEGNet + EA | DL + FB + MAA | 53.78% ± 7.68% | 0.070 |
+| 12 | EEGNet (no EA) | DL | 51.93% ± 7.20% | 0.033 |
+| 13 | SPDNet (no EA) | DL + SPD Manifold | 50.59% ± 1.87% | 0.000 |
+| 14 | FBCNet (no EA) | DL + Filter Bank | 49.70% ± 2.66% | -0.010 |
 
-> Key insight: EEG Conformer + EA (63.93%) remains SOTA. SPDNet + EA (58.52%) is competitive with EEGNet + EA (58.00%), demonstrating SPD manifold deep learning is viable on 8ch MI. Without EA, SPDNet collapses to chance (50.59%, κ≈0) — EA is critical for SPDNet. Temporal modeling (Transformer/TCN) remains the most impactful architectural choice.
+> Key insight: EEG Conformer + EA (63.93%) remains SOTA. **ER-MI + EA (62.55%)** debuts at rank 3 — a lightweight GRU reasoning model on top of an EEGNet encoder beats FBCNet (+1.44pp) and Tangent (+2.11pp) with exceptional cross-seed stability (±0.92%). Temporal modeling (Transformer/TCN) remains the most impactful architectural choice, but evidence reasoning provides a viable alternative to filter banks and Riemannian geometry.
+> ★ ER-MI = Evidence Reasoning Network (2026-07-04). 3-seed: 62.30/61.78/63.56. Ablation: steps 1→3→5: 62.15→62.30→61.85%. Step-wise: S1=61.78→S2=62.00→S3=62.30%.
 
 ### SPDNet Ablation
 

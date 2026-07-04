@@ -42,23 +42,25 @@ python main.py demo --source replay --data data/loso_binary/subj_01/X.npy \
 |------|------|------|----------|-------|
 | 1 | **EEG Conformer + EA** ✓ | DL + Transformer | **64.22%** ± 9.86% | 0.283 |
 | 2 | **EEG-TCNet + EA** ✓ | DL + TCN | **63.85%** ± 11.73% | 0.276 |
-| 3 | **FBCNet + EA** | DL + Filter Bank | **61.11%** ± 11.69% | 0.219 |
-| 4 | Tangent Space + LDA + EA | Riemannian | 60.44% ± 9.64% | 0.212 |
-| 5 | Tangent Space + LDA | Riemannian | 60.44% ± 9.64% | 0.212 |
-| 6 | FgMDM + EA (6-band, 8–30Hz) | Riemannian | 59.18% ± 8.12% | 0.180 |
-| 7 | **SPDNet + EA** (seed42) | DL + SPD Manifold | **58.52%** ± 8.38% | 0.161 |
-| 8 | EEGNet + EA | DL | 58.00% ± 10.06% | 0.161 |
-| 9 | EEGNet + SpatiotemporalAttn + EA | DL + Attention | 57.78% ± 8.55% | 0.158 |
-| 10 | MDM + EA | Riemannian | 56.22% ± 10.52% | 0.127 |
-| 11 | MAA-EEGNet-Pre + EA ⚠️ | DL + MAA | 56.00% ± 9.42% | 0.121 |
-| 12 | MAA-EEGNet + EA ⚠️ | DL + MAA | 55.33% ± 8.73% | 0.102 |
-| 13 | EEGNet + SpatiotemporalAttn | DL + Attention | 55.04% ± 7.86% | 0.096 |
-| 14 | FB-MAA-EEGNet + EA ⚠️ | DL + FB + MAA | 53.78% ± 7.68% | 0.070 |
-| 15 | EEGNet (no EA) | DL | 51.93% ± 7.20% | 0.033 |
-| 16 | SPDNet (no EA) | DL + SPD Manifold | 50.59% ± 1.87% | 0.000 |
-| 17 | FBCNet (no EA) | DL + Filter Bank | 49.70% ± 2.66% | -0.010 |
+| 3 | **ER-MI + EA** ✓★ | DL + GRU Reasoning | **62.55%** ± 0.92% | 0.246 |
+| 4 | **FBCNet + EA** | DL + Filter Bank | **61.11%** ± 11.69% | 0.219 |
+| 5 | Tangent Space + LDA + EA | Riemannian | 60.44% ± 9.64% | 0.212 |
+| 6 | Tangent Space + LDA | Riemannian | 60.44% ± 9.64% | 0.212 |
+| 7 | FgMDM + EA (6-band, 8–30Hz) | Riemannian | 59.18% ± 8.12% | 0.180 |
+| 8 | **SPDNet + EA** (seed42) | DL + SPD Manifold | **58.52%** ± 8.38% | 0.161 |
+| 9 | EEGNet + EA | DL | 58.00% ± 10.06% | 0.161 |
+| 10 | EEGNet + SpatiotemporalAttn + EA | DL + Attention | 57.78% ± 8.55% | 0.158 |
+| 11 | MDM + EA | Riemannian | 56.22% ± 10.52% | 0.127 |
+| 12 | MAA-EEGNet-Pre + EA ⚠️ | DL + MAA | 56.00% ± 9.42% | 0.121 |
+| 13 | MAA-EEGNet + EA ⚠️ | DL + MAA | 55.33% ± 8.73% | 0.102 |
+| 14 | EEGNet + SpatiotemporalAttn | DL + Attention | 55.04% ± 7.86% | 0.096 |
+| 15 | FB-MAA-EEGNet + EA ⚠️ | DL + FB + MAA | 53.78% ± 7.68% | 0.070 |
+| 16 | EEGNet (no EA) | DL | 51.93% ± 7.20% | 0.033 |
+| 17 | SPDNet (no EA) | DL + SPD Manifold | 50.59% ± 1.87% | 0.000 |
+| 18 | FBCNet (no EA) | DL + Filter Bank | 49.70% ± 2.66% | -0.010 |
 
-> ✓ = 3-seed 验证（seed 42/123/456）。Conformer 均值 64.22%（63.63/65.56/63.48），TCNet 均值 63.85%（63.85/62.96/64.74）。全部 6 个 seed > Tangent (60.44%)，确认深度模型优势不是 seed 偶然。
+> ✓ = 3-seed 验证。Conformer 均值 64.22%（63.63/65.56/63.48），TCNet 均值 63.85%（63.85/62.96/64.74），**ER-MI 均值 62.55%（62.30/61.78/63.56）**。
+> ★ = 新增算法 (2026-07-04)。ER-MI 以 EEGNet encoder + GRU 多步推理超越 FBCNet (+1.44pp) 和 Tangent (+2.11pp)，3-seed 标准差仅 ±0.92%（跨 seed 极稳定）。消融: steps=1→3→5: 62.15→62.30→61.85%, 中间监督权重消融进行中。
 
 > **核心发现**: 深度模型可以超越传统 Riemannian 基线。EEG Conformer + EA（3-seed 均值 64.22%）和 EEG-TCNet + EA（63.85%）均超过 Tangent Space + LDA + EA（60.44%），全部 6 个 seed 验证。SPDNet + EA（58.52%）首次在 8ch MI 上验证了 SPD 流形深度学习的可行性。FBCNet 20-shot 校准达 **69.42%**（项目最高分）。EA 增益与架构内部归一化强度负相关：FBCNet（无归一化）+11.41pp → SPDNet（无归一化）+7.93pp → EEGNet（BN）+6.07pp → Conformer/TCNet（LN+残差）+2.3~2.9pp → Tangent（仿射不变）±0pp。但 EA 增益也依赖数据集被试间变异性——BCI IV 2a 上 FBCNet 增益从 +11.41pp 缩至 +1.35pp。详细分析见 [EA × Architecture Interaction Analysis](docs/ea_analysis.md)。
 

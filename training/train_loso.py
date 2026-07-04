@@ -78,6 +78,8 @@ def train_on_subjects(
     augment: bool = False,
     seed: int = 42,
     verbose: bool = False,
+    model_kwargs: dict | None = None,
+    intermediate_loss_weight: float = 0.3,
 ):
     """Train a model on a list of subjects' data. Returns trained model."""
     # Concatenate all training subjects
@@ -92,7 +94,8 @@ def train_on_subjects(
     n_channels = X_all.shape[1]
     n_classes = len(np.unique(y_all))
 
-    model = create_model(model_type, n_channels=n_channels, n_classes=n_classes).to(device)
+    model = create_model(model_type, n_channels=n_channels, n_classes=n_classes,
+                         **(model_kwargs or {})).to(device)
 
     # Multi-band preprocessing (FBCNet)
     if getattr(model, "input_requires_filter_bank", False):
@@ -118,7 +121,14 @@ def train_on_subjects(
         for Xb, yb in train_loader:
             Xb, yb = Xb.to(device), yb.to(device)
             optimizer.zero_grad()
-            loss = criterion(model(Xb), yb)
+            out = model(Xb)
+            if isinstance(out, list) and intermediate_loss_weight > 0:
+                # ER-MI multi-step output: accumulate loss across steps
+                loss = criterion(out[-1], yb)
+                for step_logits in out[:-1]:
+                    loss = loss + intermediate_loss_weight * criterion(step_logits, yb)
+            else:
+                loss = criterion(out[-1] if isinstance(out, list) else out, yb)
             loss.backward()
             optimizer.step()
         scheduler.step()
@@ -168,6 +178,7 @@ def finetune_on_subject(
     lr: float = 1e-4,
     epochs: int = 20,
     seed: int = 42,
+    intermediate_loss_weight: float = 0.3,
 ) -> nn.Module:
     """
     Few-shot fine-tune on n_finetune_trials of the target subject.
@@ -211,7 +222,13 @@ def finetune_on_subject(
         for Xb, yb in ft_loader:
             Xb, yb = Xb.to(device), yb.to(device)
             optimizer.zero_grad()
-            loss = criterion(model(Xb), yb)
+            out = model(Xb)
+            if isinstance(out, list) and intermediate_loss_weight > 0:
+                loss = criterion(out[-1], yb)
+                for step_logits in out[:-1]:
+                    loss = loss + intermediate_loss_weight * criterion(step_logits, yb)
+            else:
+                loss = criterion(out[-1] if isinstance(out, list) else out, yb)
             loss.backward()
             optimizer.step()
 
@@ -254,7 +271,7 @@ def main():
                                  "fbcnet", "eeg_tcnet",
                                  "eeg_conformer", "fb_maa_eegnet",
                                  "maa_eegnet", "maa_eegnet_pre",
-                                 "fb_tcnet", "spdnet"])
+                                 "fb_tcnet", "spdnet", "er_mi", "er_mi_v2"])
     parser.add_argument("--finetune", type=int, default=0,
                         help="Few-shot FT trials per class (0 = pure LOSO)")
     parser.add_argument("--finetune_sweep", type=str, default=None,
@@ -277,6 +294,13 @@ def main():
                         help="Apply data augmentation (2x) to training data")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed for reproducibility")
+    parser.add_argument("--model_kwargs", type=str, default=None,
+                        help="JSON string of extra kwargs for create_model(), "
+                             "e.g. '{\"steps\": 5}' for ER-MI")
+    parser.add_argument("--intermediate_loss_weight", type=float, default=0.3,
+                        help="Weight for intermediate step losses in multi-step "
+                             "models like ER-MI. 0.0 disables intermediate supervision. "
+                             "Default 0.3.")
     args = parser.parse_args()
 
     if args.finetune > 0 and args.finetune_sweep:
@@ -285,6 +309,11 @@ def main():
         parser.error("--skip_train requires --checkpoint.")
     if args.checkpoint and not args.skip_train:
         print("WARNING: --checkpoint is only used with --skip_train; training will run normally.")
+
+    # Parse model kwargs
+    model_kwargs = {}
+    if args.model_kwargs:
+        model_kwargs = json.loads(args.model_kwargs)
 
     # ── Seed ────────────────────────────────────────────────────────────
     random.seed(args.seed)
@@ -355,6 +384,8 @@ def main():
                 train_subjs, args.model, device,
                 epochs=args.epochs, batch_size=args.batch_size, lr=args.lr,
                 augment=args.augment, seed=args.seed,
+                model_kwargs=model_kwargs,
+                intermediate_loss_weight=args.intermediate_loss_weight,
             )
             model_type = args.model
         base_state = copy.deepcopy(model.state_dict())
@@ -375,6 +406,7 @@ def main():
                         model_ft, test_subj,
                         n_finetune_trials=ft_n, device=device,
                         seed=args.seed,
+                        intermediate_loss_weight=args.intermediate_loss_weight,
                     )
                     print(f"  FT={ft_n:>2d}:  acc={metrics['accuracy']:.4f}  "
                           f"kappa={metrics['kappa']:.4f}")
@@ -390,6 +422,7 @@ def main():
                 model, metrics = finetune_on_subject(
                     model, test_subj, n_finetune_trials=args.finetune,
                     device=device, seed=args.seed,
+                    intermediate_loss_weight=args.intermediate_loss_weight,
                 )
                 print(f"  FT+Test: acc={metrics['accuracy']:.4f}  "
                       f"kappa={metrics['kappa']:.4f}")

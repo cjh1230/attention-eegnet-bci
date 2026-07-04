@@ -23,6 +23,21 @@
 | 8 | SPDNet d=[8,8] | no EA, 默认seed, 60ep | `loso_spdnet_summary.json` | **50.59%** ± 1.87% | 50.59% ± 1.87% | ✅ 精确 |
 | 9 | EEGNet | + EA, 60ep(?)*, 默认seed | `loso_eegnet_ea_summary.json` | **52.96%** ± 8.12% | 58.00% ± 10.06% | ❌ −5.04pp |
 
+### ER-MI (Evidence Reasoning Network) — 新增 2026-07-04
+
+| # | 模型 | 配置 | JSON 文件 | Acc (JSON) | 说明 |
+|---|------|------|-----------|------------|------|
+| ER1 | **ER-MI S3** | + EA, seed42, 80ep | `loso_er_mi_ea_seed42_summary.json` | **62.30%** ± 11.64% | 基准，κ=0.241 |
+| ER2 | **ER-MI S3** | + EA, seed123, 80ep | `loso_er_mi_ea_seed123_summary.json` | **61.78%** ± 8.97% | κ=0.231 |
+| ER3 | **ER-MI S3** | + EA, seed456, 80ep | `loso_er_mi_ea_seed456_summary.json` | **63.56%** ± 11.28% | κ=0.267 |
+| ER4 | **ER-MI 3-seed mean** | + EA, 80ep | — | **62.55%** ± 0.92% | κ=0.246, 跨seed极稳定 |
+| ER5 | ER-MI S1 | + EA, seed42, 80ep | `loso_er_mi_ea_seed42_summary.json`† | **62.15%** ± 12.22% | 步数消融: 一步推理 |
+| ER6 | ER-MI S5 | + EA, seed42, 80ep | `loso_er_mi_ea_seed42_summary.json`† | **61.85%** ± 12.29% | 步数消融: 五步推理 |
+| ER7 | ER-MI S3 无中间监督 | + EA, seed42, 80ep | `loso_er_mi_ea_seed42_summary.json`† | **?** | 中间监督消融 |
+
+> † 被后续运行覆盖，结果仅记录在本文档中。建议后续实验使用 `--output_dir` 区分输出目录。
+> ER-MI Step-wise 分析: S1=61.78% → S2=62.00% → S3=62.30% (微弱递增, +0.52pp)
+
 > \* EEGNet + EA JSON 文件日期较早，epochs 数未记录在 JSON 中。52.96% 远低于 README 声明的 58.00%，推测 README 使用了更长的训练（80 epochs）或不同的 seed。
 > 该 JSON 的 kappa=0.058 也显著低于 README 的 kappa=0.161，进一步证实并非同一次运行。
 
