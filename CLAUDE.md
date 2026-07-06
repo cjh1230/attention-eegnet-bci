@@ -72,6 +72,7 @@ All commands below assume `conda activate bci` is active. Use `python`, not a ha
 │   ├── fb_maa_eegnet.py     # FB-MAA-EEGNet
 │   ├── maa_eegnet.py        # MAA-EEGNet (MAA after temporal conv)
 │   ├── maa_eegnet_pre.py    # MAA-EEGNet-Pre (MAA before temporal conv)
+│   ├── brt_det.py           # BRT-Det (Band-Region-Time Evidence Detector, v1)
 │   ├── fusion.py            # MultiBandFusion (mu/beta/full)
 │   └── mixstyle.py          # MixStyle domain generalization (Zhou, ICLR 2021)
 ├── training/
@@ -345,6 +346,7 @@ model = create_model("maa_eegnet", n_channels=8, n_classes=3)
 model = create_model("maa_eegnet_pre", n_channels=8, n_classes=3)
 model = create_model("er_mi", n_channels=8, n_classes=3)       # ER-MI v1: GRU evidence reasoning
 model = create_model("er_mi_v2", n_channels=8, n_classes=3)    # ER-MI v2: multi-token evidence
+model = create_model("brt_det", n_channels=8, n_classes=2)    # BRT-Det v8: Band-Region-Time Evidence Detector (63.02% 3-seed)
 ```
 
 ### New model architectures
@@ -360,6 +362,13 @@ from models.motor_area_attention import MotorAreaAttention
 from models.fb_maa_eegnet import FBMAAEEGNet
 from models.maa_eegnet import MAAEEGNet
 from models.maa_eegnet_pre import MAAEEGNetPre
+from models.brt_det import BRTDet
+
+# BRT-Det: Band-Region-Time Evidence Detector (v8, 3-seed: 63.02% ± 1.42%, rank 3)
+model = BRTDet(n_channels=8, n_classes=2, use_region_pool=False, n_time_cells=24,
+               dilations=[1,2,4], agg_mode="objectness", use_band_gate=True)
+model = BRTDet(n_channels=8, n_classes=2, topk=10)  # sparse top-K evidence aggregation
+model = BRTDet(n_channels=8, n_classes=2, use_diff_channels=True)  # +C3/C4 diff channels
 
 # EEG Conformer: CNN backbone + Transformer encoder (best overall: 63.93%)
 model = EEGConformer(n_channels=8, n_classes=2, d_model=64, n_heads=4, n_layers=2)
@@ -448,21 +457,21 @@ MOTOR_CHANNELS_BCI4 = [
 |------|-------|------|----------|-------|
 | 1 | **EEG Conformer + EA** | DL + Transformer | **63.93%** ± 9.58% | 0.277 |
 | 2 | **EEG-TCNet + EA** | DL + TCN | **63.41%** ± 10.51% | 0.265 |
-| 3 | **ER-MI + EA** ★ | DL + GRU Reasoning | **62.55%** ± 0.92% | 0.246 |
-| 4 | **FBCNet + EA** | DL + Filter Bank | **61.11%** ± 11.69% | 0.219 |
-| 5 | Tangent Space + LDA + EA | Riemannian | 60.44% ± 9.64% | 0.212 |
-| 6 | FgMDM + EA (6-band, 8–30Hz) | Riemannian | 59.18% ± 8.12% | 0.180 |
-| 7 | **SPDNet + EA** (seed42) | DL + SPD Manifold | **58.52%** ± 8.38% | 0.161 |
-| 8 | EEGNet + EA | DL | 58.00% ± 10.06% | 0.161 |
-| 9 | EEGNet + SpatiotemporalAttn + EA | DL + Attention | 57.78% ± 8.55% | 0.158 |
-| 10 | MDM + EA | Riemannian | 56.22% ± 10.52% | 0.127 |
-| 11 | FB-MAA-EEGNet + EA | DL + FB + MAA | 53.78% ± 7.68% | 0.070 |
-| 12 | EEGNet (no EA) | DL | 51.93% ± 7.20% | 0.033 |
-| 13 | SPDNet (no EA) | DL + SPD Manifold | 50.59% ± 1.87% | 0.000 |
-| 14 | FBCNet (no EA) | DL + Filter Bank | 49.70% ± 2.66% | -0.010 |
+| 3 | **BRT-Det + EA** ★ | DL + Detection | **63.02%** ± 1.42% | 0.257 |
+| 4 | **ER-MI + EA** | DL + GRU Reasoning | **62.55%** ± 0.92% | 0.246 |
+| 5 | **FBCNet + EA** | DL + Filter Bank | **61.11%** ± 11.69% | 0.219 |
+| 6 | Tangent Space + LDA + EA | Riemannian | 60.44% ± 9.64% | 0.212 |
+| 7 | FgMDM + EA (6-band, 8–30Hz) | Riemannian | 59.18% ± 8.12% | 0.180 |
+| 8 | **SPDNet + EA** (seed42) | DL + SPD Manifold | **58.52%** ± 8.38% | 0.161 |
+| 9 | EEGNet + EA | DL | 58.00% ± 10.06% | 0.161 |
+| 10 | EEGNet + SpatiotemporalAttn + EA | DL + Attention | 57.78% ± 8.55% | 0.158 |
+| 11 | MDM + EA | Riemannian | 56.22% ± 10.52% | 0.127 |
+| 12 | FB-MAA-EEGNet + EA | DL + FB + MAA | 53.78% ± 7.68% | 0.070 |
+| 13 | EEGNet (no EA) | DL | 51.93% ± 7.20% | 0.033 |
+| 14 | SPDNet (no EA) | DL + SPD Manifold | 50.59% ± 1.87% | 0.000 |
+| 15 | FBCNet (no EA) | DL + Filter Bank | 49.70% ± 2.66% | -0.010 |
 
-> Key insight: EEG Conformer + EA (63.93%) remains SOTA. **ER-MI + EA (62.55%)** debuts at rank 3 — a lightweight GRU reasoning model on top of an EEGNet encoder beats FBCNet (+1.44pp) and Tangent (+2.11pp) with exceptional cross-seed stability (±0.92%). Temporal modeling (Transformer/TCN) remains the most impactful architectural choice, but evidence reasoning provides a viable alternative to filter banks and Riemannian geometry.
-> ★ ER-MI = Evidence Reasoning Network (2026-07-04). 3-seed: 62.30/61.78/63.56. Ablation: steps 1→3→5: 62.15→62.30→61.85%. Step-wise: S1=61.78→S2=62.00→S3=62.30%.
+> Key insight: EEG Conformer + EA (63.93%) remains SOTA. **BRT-Det + EA (63.02%)** debuts at rank 3 — a lightweight detection model (32K params) that reframes MI decoding as band-region-time evidence detection. Band Gate (per-band scalar gating, +5.41pp) is the key v8 breakthrough. BRT-Det beats ER-MI (+0.47pp) and FBCNet (+1.91pp) despite using only 32K parameters. ★ ER-MI (62.55%): 3-seed 62.30/61.78/63.56.
 
 ### SPDNet Ablation
 
@@ -520,7 +529,7 @@ MOTOR_CHANNELS_BCI4 = [
 
 ## Current Sprint
 
-**Sprint 3** (late June–July 2026): SPD manifold deep learning + paper drafting.
+**Sprint 3** (late June–July 2026): SPD manifold deep learning, BRT-Det detection paradigm + paper drafting.
 
 - [x] SPDNet implementation: BiMap, ReEig, LogEig layers + model factory
 - [x] SPD covariance computation: SCM, Ledoit-Wolf shrinkage, multiband
@@ -532,12 +541,20 @@ MOTOR_CHANNELS_BCI4 = [
 - [x] EA × Architecture interaction analysis script
 - [x] Paper draft (docs/paper_draft.md, results/paper_outputs/)
 - [x] Test suite: 335 → 350 tests (29 files)
+- [x] **BRT-Det (Band-Region-Time Evidence Detector)**: 46.6% → 63.0% across 35+ experiments
+- [x] BRT-Det v8: Band Gate (per-band scalar gating) — 3-seed 63.02% ± 1.42%, rank 3
 
 **Key findings:**
 - SPDNet + EA (58.52%) is competitive with EEGNet + EA (58.00%) — SPD manifold DL viable on 8ch
 - SPDNet without EA collapses to chance (κ≈0) — EA is even more critical for SPDNet than for CNN
-- SPDNet training is seed-sensitive; controlled seeds needed for stable convergence
 - EEG Conformer + EA (63.93%) remains SOTA; temporal modeling > spatial/manifold for 8ch MI
+- **BRT-Det v8 (63.02%, 3-seed)** debuts at rank 3 with only 32K params:
+  - Band Gate (32 params): per-band reliability weighting — NOT cross-band mixing
+  - Core insight: MI effective bands vary across subjects; band-wise gating > forced mixing
+  - v8 3-seed is only +0.43pp over v7 best single-seed, but κ<0 subjects drop from 7→3
+  - Main gain is cross-subject stability, not peak accuracy
+- **Cross-subject variance** is the dominant bottleneck: removing 3 κ<0 subjects lifts mean to 66.17%
+- **BRT-Det now lacks subject adaptation, not model capacity** — next: cross-dataset validation, few-shot FT, evidence visualization
 
 ### Sprint 2 (completed): Traditional-driven neural network design + full experiment sweep.
 

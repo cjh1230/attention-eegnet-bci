@@ -173,7 +173,8 @@ def create_model(
     model_type : str
         "eegnet" | "eegnet_se" | "eegnet_mhsa" | "eegnet_temporal" |
         "eegnet_spatiotemporal" | "fbcnet" | "eeg_tcnet" |
-        "eeg_conformer" | "fb_maa_eegnet" | "spdnet" | "er_mi"
+        "eeg_conformer" | "fb_maa_eegnet" | "spdnet" | "er_mi" |
+        "er_mi_v2" | "brt_det"
     n_channels : int
     n_classes : int
     **kwargs : passed to model constructor
@@ -250,8 +251,13 @@ def create_model(
 
         return ERMIv2(n_channels=n_channels, n_classes=n_classes, **kwargs)
 
+    if model_type == "brt_det":
+        from models.brt_det import BRTDet
+
+        return BRTDet(n_channels=n_channels, n_classes=n_classes, **kwargs)
+
     raise ValueError(f"Unknown model_type: {model_type}. "
                      f"Choices: eegnet, fbcnet, eeg_tcnet, "
                      f"eeg_conformer, fb_maa_eegnet, spdnet, "
-                     f"er_mi, er_mi_v2, "
+                     f"er_mi, er_mi_v2, brt_det, "
                      f"{', '.join(attn_map)}")

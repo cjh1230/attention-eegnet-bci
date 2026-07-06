@@ -80,6 +80,9 @@ def train_on_subjects(
     verbose: bool = False,
     model_kwargs: dict | None = None,
     intermediate_loss_weight: float = 0.3,
+    label_smoothing: float = 0.0,
+    weight_decay: float = 0.0,
+    obj_reg_weight: float = 0.0,
 ):
     """Train a model on a list of subjects' data. Returns trained model."""
     # Concatenate all training subjects
@@ -111,9 +114,11 @@ def train_on_subjects(
 
     class_weights = compute_class_weight("balanced", classes=np.unique(y_all), y=y_all)
     class_weights = torch.tensor(class_weights, dtype=torch.float32, device=device)
-    criterion = nn.CrossEntropyLoss(weight=class_weights)
+    criterion = nn.CrossEntropyLoss(weight=class_weights,
+                                     label_smoothing=label_smoothing)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr,
+                                  weight_decay=weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
 
     for epoch in range(1, epochs + 1):
@@ -121,17 +126,43 @@ def train_on_subjects(
         for Xb, yb in train_loader:
             Xb, yb = Xb.to(device), yb.to(device)
             optimizer.zero_grad()
-            out = model(Xb)
-            if isinstance(out, list) and intermediate_loss_weight > 0:
+
+            # Forward — request objectness map if the model supports it
+            # and we're using objectness regularization
+            if obj_reg_weight > 0 and hasattr(model, "use_objectness"):
+                out = model(Xb, return_objectness=True)
+                if isinstance(out, tuple):
+                    logits, obj_map = out
+                else:
+                    logits, obj_map = out, None
+            else:
+                out = model(Xb)
+                logits = out
+                obj_map = None
+
+            if isinstance(logits, list) and intermediate_loss_weight > 0:
                 # ER-MI multi-step output: accumulate loss across steps
-                loss = criterion(out[-1], yb)
-                for step_logits in out[:-1]:
+                loss = criterion(logits[-1], yb)
+                for step_logits in logits[:-1]:
                     loss = loss + intermediate_loss_weight * criterion(step_logits, yb)
             else:
-                loss = criterion(out[-1] if isinstance(out, list) else out, yb)
+                loss = criterion(
+                    logits[-1] if isinstance(logits, list) else logits, yb)
+
+            # Objectness entropy regularization
+            if obj_map is not None:
+                # obj_map: (B, nb, S, T_cells) in [0,1]
+                eps = 1e-6
+                obj_reg = -(obj_map * torch.log(obj_map + eps)
+                            + (1 - obj_map) * torch.log(1 - obj_map + eps)).mean()
+                loss = loss + obj_reg_weight * obj_reg
+
             loss.backward()
             optimizer.step()
         scheduler.step()
+        if epoch % 20 == 0 or epoch == epochs:
+            print(f"  Epoch {epoch:3d}/{epochs}  lr={scheduler.get_last_lr()[0]:.2e}",
+                  flush=True)
 
     return model
 
@@ -179,6 +210,8 @@ def finetune_on_subject(
     epochs: int = 20,
     seed: int = 42,
     intermediate_loss_weight: float = 0.3,
+    label_smoothing: float = 0.0,
+    weight_decay: float = 0.0,
 ) -> nn.Module:
     """
     Few-shot fine-tune on n_finetune_trials of the target subject.
@@ -214,8 +247,9 @@ def finetune_on_subject(
     ft_loader = DataLoader(ft_ds, batch_size=min(16, len(ft_indices)), shuffle=True,
                            generator=torch.Generator().manual_seed(seed))
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr,
+                                  weight_decay=weight_decay)
+    criterion = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
 
     model.train()
     for epoch in range(epochs):
@@ -271,7 +305,8 @@ def main():
                                  "fbcnet", "eeg_tcnet",
                                  "eeg_conformer", "fb_maa_eegnet",
                                  "maa_eegnet", "maa_eegnet_pre",
-                                 "fb_tcnet", "spdnet", "er_mi", "er_mi_v2"])
+                                 "fb_tcnet", "spdnet", "er_mi", "er_mi_v2",
+                                 "brt_det"])
     parser.add_argument("--finetune", type=int, default=0,
                         help="Few-shot FT trials per class (0 = pure LOSO)")
     parser.add_argument("--finetune_sweep", type=str, default=None,
@@ -301,6 +336,16 @@ def main():
                         help="Weight for intermediate step losses in multi-step "
                              "models like ER-MI. 0.0 disables intermediate supervision. "
                              "Default 0.3.")
+    parser.add_argument("--label_smoothing", type=float, default=0.0,
+                        help="Label smoothing for CrossEntropyLoss (default 0.0)")
+    parser.add_argument("--weight_decay", type=float, default=0.0,
+                        help="Weight decay for Adam optimizer (default 0.0)")
+    parser.add_argument("--obj_reg_weight", type=float, default=0.0,
+                        help="Objectness entropy regularization weight "
+                             "(0.0 = off, 0.001–0.01 recommended for BRT-Det)")
+    parser.add_argument("--tag", type=str, default=None,
+                        help="Optional tag appended to output filenames to "
+                             "distinguish experiment variants (e.g. 'diff_ch', 'band_gate')")
     args = parser.parse_args()
 
     if args.finetune > 0 and args.finetune_sweep:
@@ -386,6 +431,9 @@ def main():
                 augment=args.augment, seed=args.seed,
                 model_kwargs=model_kwargs,
                 intermediate_loss_weight=args.intermediate_loss_weight,
+                label_smoothing=args.label_smoothing,
+                weight_decay=args.weight_decay,
+                obj_reg_weight=args.obj_reg_weight,
             )
             model_type = args.model
         base_state = copy.deepcopy(model.state_dict())
@@ -407,6 +455,8 @@ def main():
                         n_finetune_trials=ft_n, device=device,
                         seed=args.seed,
                         intermediate_loss_weight=args.intermediate_loss_weight,
+                        label_smoothing=args.label_smoothing,
+                        weight_decay=args.weight_decay,
                     )
                     print(f"  FT={ft_n:>2d}:  acc={metrics['accuracy']:.4f}  "
                           f"kappa={metrics['kappa']:.4f}")
@@ -423,6 +473,8 @@ def main():
                     model, test_subj, n_finetune_trials=args.finetune,
                     device=device, seed=args.seed,
                     intermediate_loss_weight=args.intermediate_loss_weight,
+                    label_smoothing=args.label_smoothing,
+                    weight_decay=args.weight_decay,
                 )
                 print(f"  FT+Test: acc={metrics['accuracy']:.4f}  "
                       f"kappa={metrics['kappa']:.4f}")
@@ -461,11 +513,12 @@ def main():
     ft_tag = f"_ft{args.finetune}" if args.finetune > 0 else ""
     ea_tag = "_ea" if args.align else ""
     seed_tag = f"_seed{args.seed}"
+    variant_tag = f"_{args.tag}" if args.tag else ""
 
     if ft_sweep is not None:
         # ── FT Sweep CSV ────────────────────────────────────────────
         sweep_tag = f"_ftsweep{ea_tag}"
-        csv_path = output_dir / f"loso_{args.model}{ds_tag}{sweep_tag}{seed_tag}.csv"
+        csv_path = output_dir / f"loso_{args.model}{ds_tag}{sweep_tag}{seed_tag}{variant_tag}.csv"
 
         if per_subject_results:
             fieldnames = list(per_subject_results[0].keys())
@@ -505,11 +558,11 @@ def main():
             summary[f"ft{ft_n}_acc_mean"] = round(float(vals.mean()), 4)
             summary[f"ft{ft_n}_acc_std"] = round(float(vals.std()), 4)
             print(f"FT={ft_n:>2d}:  acc={vals.mean():.4f} ± {vals.std():.4f}")
-        json_path = output_dir / f"loso_{args.model}{ds_tag}{sweep_tag}{seed_tag}_summary.json"
+        json_path = output_dir / f"loso_{args.model}{ds_tag}{sweep_tag}{seed_tag}{variant_tag}_summary.json"
 
     else:
         # ── Single FT / pure LOSO CSV ───────────────────────────────
-        csv_path = output_dir / f"loso_{args.model}{ds_tag}{ft_tag}{ea_tag}{seed_tag}.csv"
+        csv_path = output_dir / f"loso_{args.model}{ds_tag}{ft_tag}{ea_tag}{seed_tag}{variant_tag}.csv"
         if per_subject_results:
             fieldnames = list(per_subject_results[0].keys())
             with open(csv_path, "w", newline="") as f:
@@ -539,7 +592,7 @@ def main():
         print(f"Kappa:     mean={kappas.mean():.4f}  std={kappas.std():.4f}")
         print(f"Per-subject: {[f'{a:.3f}' for a in accs]}")
         print(f"Best/Worst: {accs.max():.4f} / {accs.min():.4f}")
-        json_path = output_dir / f"loso_{args.model}{ds_tag}{ft_tag}{ea_tag}{seed_tag}_summary.json"
+        json_path = output_dir / f"loso_{args.model}{ds_tag}{ft_tag}{ea_tag}{seed_tag}{variant_tag}_summary.json"
 
     with open(json_path, "w") as f:
         json.dump(summary, f, indent=2)
