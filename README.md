@@ -41,9 +41,9 @@ python main.py demo --source replay --data data/loso_binary/subj_01/X.npy \
 | Rank | 方法 | 类型 | Accuracy | Kappa |
 |------|------|------|----------|-------|
 | 1 | **EEG Conformer + EA** ✓ | DL + Transformer | **64.22%** ± 9.86% | 0.283 |
-| 2 | **EEG-TCNet + EA** ✓ | DL + TCN | **63.41%** ± 10.51% | 0.265 |
-| 3 | **BRT-Det v8 + EA** ✓★ | DL + Detection | **63.02%** ± 1.42%† | 0.257 |
-| 4 | **FB-ER-MI + EA** ✓★ | DL + Evidence Reasoning | **63.97%** ± 0.46%†† | 0.277 |
+| 2 | **FB-ER-MI + EA** ✓★ | DL + Evidence Reasoning | **63.97%** ± 0.46%†† | 0.277 |
+| 3 | **EEG-TCNet + EA** ✓ | DL + TCN | **63.41%** ± 10.51% | 0.265 |
+| 4 | **BRT-Det v8 + EA** ✓★ | DL + Detection | **63.02%** ± 1.42%† | 0.257 |
 | 5 | **ER-MI + EA** ✓★ | DL + GRU Reasoning | **62.55%** ± 0.92% | 0.246 |
 | 6 | **FBCNet + EA** | DL + Filter Bank | **61.11%** ± 11.69% | 0.219 |
 | 7 | Tangent Space + LDA + EA | Riemannian | 60.44% ± 9.64% | 0.212 |
@@ -115,6 +115,30 @@ python main.py demo --source replay --data data/loso_binary/subj_01/X.npy \
 | MDM + EA | Riemannian | 33.43% ± 10.92% | 0.112 |
 
 > Chance level: PhysioNet 50% (binary), BCI IV 2a 25% (4-class). ★ = 自研算法。
+
+### 结果报告协议
+
+| 表 | 口径 | 用途 |
+|------|------|------|
+| **主排名表** | 3-seed LOSO mean ± std | 论文主结果，稳定性验证 |
+| **Ensemble 表** | 同批 fold logits, seed42 | 融合增益（单模型与主表略有差异属正常） |
+| **Ablation** | seed42 | 消融链逻辑完整性 |
+| **Oracle** | per-subject max | 理论上限，不可作为正式结果报告 |
+
+> 注：Ensemble 表使用 `ensemble_loso.py` 重新训练并保存同折 logits，因此单模型数值与独立 LOSO 主表略有差异（±1pp 内属于训练随机性）。论文主表以 3-seed LOSO 均值为准，融合增益以同批 logit 口径为准。
+
+### 协议上限分析
+
+当前 8ch LOSO（30 subjects, 无目标被试校准）的实际上限：
+
+```text
+7-model oracle:        71.04%  ← 所有模型在最好被试上取最优的理论上限
+3 自研 oracle:         69.04%  ← 纯自研模型池上限
+Fixed ensemble:        66.00%  ← 当前合法融合最好结果
+Best single (3-seed):  63.97%  ← 单模型 3-seed 均值
+```
+
+> **协议上限约 69-71%，不是模型单独的问题。** 8 通道少空间信息 + LOSO 跨被试 + 无校准是硬约束。FBCNet 20-shot 达 69.42% 说明目标被试校准数据是关键——少量校准可突破纯 LOSO 上限。详细分析见 [开发日志](docs/brt_det_development.md)。
 
 ---
 
