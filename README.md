@@ -1,6 +1,6 @@
 # 基于运动想象的脑-机交互算法研究
 
-> **XH-202610** · 挑战杯 2026 · `master` [![tests](https://img.shields.io/badge/tests-350%20passed-brightgreen)]()
+> **XH-202610** · 挑战杯 2026 · `master` [![tests](https://img.shields.io/badge/tests-745%20passed-brightgreen)]()
 
 面向 8 通道 DeepBCI 的少通道运动想象 BCI 多方法对比与在线闭环系统。使用 MNE-Python 预处理，对比 EEGNet、EEG Conformer、EEG-TCNet、FBCNet、SPDNet 等深度模型与 Riemannian Geometry 传统强基线，构建 8 通道跨被试 MI 识别、消融实验与在线闭环原型。
 
@@ -262,6 +262,8 @@ EA 增益 = f(架构内部归一化 × 数据集被试间变异性)
 │   ├── run_ablation_all.py         #   10 配置消融实验
 │   ├── analyze_ea_effects.py       # ★ EA × 架构交互分析
 │   ├── analyze_spdnet_vs_tangent.py  # ★ SPDNet vs Tangent 对比分析
+│   ├── visualize_evidence.py      # ★ BRT-Det evidence heatmaps (band×ch×time)
+│   ├── visualize_cat.py           # ★ Class Activation Topography (GradCAM + MNE topomaps)
 │   └── make_paper_figures.py       # ★ 论文图表生成 (6 figures + 统计检验)
 ├── docs/                           # ★ 研究文档与论文草稿
 │   ├── ea_analysis.md              #   EA 增益双因素分析
@@ -270,7 +272,7 @@ EA 增益 = f(架构内部归一化 × 数据集被试间变异性)
 │   ├── research_proposal.md        #   研究计划
 │   ├── neural_sde_research_plan.md #   Neural SDE 研究计划
 │   └── spd_ssl_research_plan.md    #   SPD SSL 研究计划
-├── tests/                          # 350 个单元测试 (29 文件)
+├── tests/                          # 745 个单元测试 (40 文件)
 ├── main.py                         # 统一入口 (18 个命令)
 ├── environment.yml
 └── CLAUDE.md
@@ -337,6 +339,9 @@ python scripts/run_time_window_sweep.py --method tangent --align     # 时间窗
 python scripts/run_ablation_all.py --epochs 80                        # 10 配置消融
 python scripts/analyze_ea_effects.py --data_dir data/loso_binary      # EA 效果分析
 python scripts/analyze_spdnet_vs_tangent.py                           # SPDNet vs Tangent
+python scripts/visualize_evidence.py --subject 7                     # BRT-Det evidence heatmaps
+python scripts/visualize_cat.py --model eeg_conformer \
+    --checkpoint checkpoints/conformer_best.pt --subject 7            # ★ CAT: GradCAM + topomaps
 python scripts/make_paper_figures.py                                  # 论文图表 (6 figs)
 
 # === 工具 ===
@@ -346,7 +351,7 @@ python main.py export                # Excel 报告
 python main.py figures               # 报告图表
 
 # === 质量 ===
-pytest tests/ -v                     # 350 个测试
+pytest tests/ -v                     # 745 个测试
 black . && ruff check .              # 格式化 + Lint
 ```
 
@@ -477,7 +482,7 @@ DataSource (EEGSource Protocol)
 ## 参考文献
 
 - Lawhern, V. J., et al. (2018). EEGNet: a compact convolutional neural network for EEG-based brain-computer interfaces. *J. Neural Eng.*, 15(5). [DOI:10.1088/1741-2552/aace8c](https://doi.org/10.1088/1741-2552/aace8c)
-- Song, Y., et al. (2023). EEG Conformer: Convolutional Transformer for EEG Decoding. *arXiv:2301.05578*.
+- Song, Y., et al. (2023). EEG Conformer: Convolutional Transformer for EEG Decoding and Visualization. *IEEE TNSRE*, 31. [Official repo](https://github.com/eeyhsong/EEG-Conformer) — 755★, Class Activation Topography (CAT) visualisation.
 - Ingolfsson, T. M., et al. (2020). EEG-TCNet: An Accurate Temporal Convolutional Network for Embedded Motor-Imagery BCI. *IEEE SMC*.
 - Bakshi, K., et al. (2021). FBCNet: A Multi-view Convolutional Neural Network for BCI. *arXiv:2104.01233*.
 - Huang, Z. & Van Gool, L. (2017). A Riemannian Network for SPD Matrix Learning. *AAAI*.

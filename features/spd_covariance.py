@@ -408,10 +408,10 @@ def compute_covariance_shrinkage(
     for i in range(N):
         x = X[i]
         S = (x @ x.T) / T  # SCM
+        trS = np.trace(S)
 
         if alpha is None:
             # OAS: optimal shrinkage under Frobenius norm
-            trS = np.trace(S)
             trS2 = np.trace(S @ S)
             d = C
             # OAS formula: rho = (1 - 2/d) * tr(S^2) + tr(S)^2

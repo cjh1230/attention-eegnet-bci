@@ -82,6 +82,7 @@ class BRTDet(nn.Module):
         use_band_mixer: bool = False,
         use_diff_channels: bool = False,
         use_band_gate: bool = False,
+        use_temporal_gate: bool = False,
     ) -> None:
         super().__init__()
 
@@ -102,6 +103,7 @@ class BRTDet(nn.Module):
         self.use_band_mixer = use_band_mixer
         self.use_diff_channels = use_diff_channels
         self.use_band_gate = use_band_gate
+        self.use_temporal_gate = use_temporal_gate
 
         # Spatial dimension after pooling
         self._spatial_dim = n_regions if use_region_pool else n_channels
@@ -160,6 +162,18 @@ class BRTDet(nn.Module):
                 nn.Linear(hidden, hidden // 2),
                 nn.ReLU(),
                 nn.Linear(hidden // 2, 1),
+            )
+
+        # ── Temporal Gate ──
+        # Per-time-cell scalar gate: learns which temporal windows
+        # carry MI evidence.  ~200 params.  Applied after backbone,
+        # before detection head — weights the evidence grid along the
+        # time axis independently for each trial.
+        if use_temporal_gate:
+            self.temporal_gate_proj = nn.Sequential(
+                nn.Linear(hidden, hidden // 4),
+                nn.ReLU(),
+                nn.Linear(hidden // 4, 1),
             )
 
         # ── Detection Backbone ──
@@ -359,6 +373,20 @@ class BRTDet(nn.Module):
 
         feat = self.backbone(x)         # (B*nb, hidden, S, T_cells)
 
+        # Temporal gate: per-time-cell scalar weight
+        # Pool over bands and spatial dims to get per-time-cell features,
+        # then learn which time cells are most informative.
+        if self.use_temporal_gate:
+            gate_in = feat.reshape(B, nb, self.hidden, S, self.n_time_cells)
+            gate_in = gate_in.mean(dim=(1, 3))          # (B, hidden, T_cells)
+            gate_in = gate_in.permute(0, 2, 1)           # (B, T_cells, hidden)
+            gate_t = torch.sigmoid(self.temporal_gate_proj(gate_in))  # (B, T_cells, 1)
+            gate_t = gate_t.squeeze(-1)                   # (B, T_cells)
+            gate_t = gate_t.unsqueeze(1).unsqueeze(2).unsqueeze(3)  # (B, 1, 1, 1, T_cells)
+            feat = feat.reshape(B, nb, self.hidden, S, self.n_time_cells)
+            feat = feat * gate_t                         # broadcast over nb, hidden, S
+            feat = feat.reshape(B * nb, self.hidden, S, self.n_time_cells)
+
         # Band gate: per-band scalar weight (learnable noise suppression)
         if self.use_band_gate:
             # Pool each band's features → gate scalar
@@ -430,11 +458,8 @@ class BRTDet(nn.Module):
             x_r = self.temporal_stem(x_r)
             x_r = x_r.reshape(B * nb, th, S, T_in)
 
-            # Grid pooling (mean + log-var) + spatial mixing + backbone + head
-            x_mean = F.adaptive_avg_pool2d(x_r, (S, self.n_time_cells))
-            x_sq = F.adaptive_avg_pool2d(x_r ** 2, (S, self.n_time_cells))
-            x_var = x_sq - x_mean ** 2
-            x_r = torch.cat([x_mean, torch.log(x_var + 1e-6)], dim=1)
+            # Grid pooling (mean only — matches forward pass) + spatial mixing + backbone + head
+            x_r = F.adaptive_avg_pool2d(x_r, (S, self.n_time_cells))
             x_r = self.spatial_mix(x_r)
             feat = self.backbone(x_r)
             pred = self.head(feat)

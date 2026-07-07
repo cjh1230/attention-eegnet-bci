@@ -16,7 +16,7 @@ def small_tcnet():
     """EEG-TCNet with small config for fast tests."""
     return EEGTCNet(
         n_channels=8, n_classes=3, F1=4, D=2, F2=8,
-        tcn_kernel=8, tcn_dilations=[1, 2], dropout=0.3,
+        tcn_kernel=8, tcn_depth=2, dropout=0.3,
     )
 
 
@@ -26,16 +26,16 @@ def small_tcnet():
 
 class TestTCNBlock:
     def test_output_shape(self):
-        block = TCNBlock(in_channels=8, kernel_size=8, dilations=[1, 2])
+        block = TCNBlock(in_channels=8, out_channels=8, kernel_size=8, depth=2)
         x = torch.randn(2, 8, 100)
         out = block(x)
-        # batch and channels preserved; time may vary slightly with dilation
+        # batch and channels preserved; time may vary slightly with causal padding
         assert out.shape[0] == x.shape[0]
         assert out.shape[1] == x.shape[1]
 
     def test_not_identity(self):
         """TCN should change the input (not identity mapping)."""
-        block = TCNBlock(in_channels=8, kernel_size=8, dilations=[1, 2])
+        block = TCNBlock(in_channels=8, out_channels=8, kernel_size=8, depth=2)
         # Use a longer input so residuals work across all layers
         x = torch.randn(2, 8, 200)
         block.eval()
@@ -151,7 +151,7 @@ class TestEEGTCNetCheckpoint:
 
         loaded = EEGTCNet(
             n_channels=8, n_classes=3, F1=4, D=2, F2=8,
-            tcn_kernel=8, tcn_dilations=[1, 2], dropout=0.3,
+            tcn_kernel=8, tcn_depth=2, dropout=0.3,
         )
         loaded.eval()
         loaded.load_state_dict(torch.load(path, weights_only=True)["state_dict"])

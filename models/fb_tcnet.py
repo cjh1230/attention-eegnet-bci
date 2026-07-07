@@ -47,11 +47,15 @@ class FBTCNet(nn.Module):
     F2 : int
         Output channels per band after pooling (default 16).
     tcn_kernel : int
-        TCN depthwise kernel size (default 16).
-    tcn_dilations : list[int]
-        TCN dilation schedule (default [1, 2, 4, 8]).
+        TCN kernel size (default 10, matches official).
+    tcn_depth : int
+        Number of double-conv TCN blocks (default 3, matches official).
+    tcn_filters : int
+        Number of filters in each TCN Conv1d (default 10, matches official).
     dropout : float
         Dropout probability (default 0.5).
+    causal : bool
+        Use causal padding in TCN (default True, matches official).
     """
 
     input_requires_filter_bank: bool = True
@@ -64,14 +68,13 @@ class FBTCNet(nn.Module):
         F1: int = 8,
         D: int = 2,
         F2: int = 16,
-        tcn_kernel: int = 16,
-        tcn_dilations: list[int] | None = None,
+        tcn_kernel: int = 10,
+        tcn_depth: int = 3,
+        tcn_filters: int = 10,
+        causal: bool = True,
         dropout: float = 0.5,
     ) -> None:
         super().__init__()
-
-        if tcn_dilations is None:
-            tcn_dilations = [1, 2, 4, 8]
 
         self.n_bands = n_bands
         self.n_channels = n_channels
@@ -92,17 +95,19 @@ class FBTCNet(nn.Module):
             nn.Dropout(dropout),
         )
 
-        # ---- TCN Block (shared across bands) ----
+        # ---- TCN Block (shared across bands, double-conv + causal) ----
         self.tcn = TCNBlock(
             in_channels=tcn_in,
+            out_channels=tcn_filters,
             kernel_size=tcn_kernel,
-            dilations=tcn_dilations,
+            depth=tcn_depth,
             dropout=dropout,
+            causal=causal,
         )
 
         # ---- Per-band pooling + pointwise ----
         self.band_pool = nn.Sequential(
-            nn.Conv1d(tcn_in, F2, 1, bias=False),
+            nn.Conv1d(tcn_filters, F2, 1, bias=False),
             nn.BatchNorm1d(F2),
             nn.ELU(),
             nn.AdaptiveAvgPool1d(1),   # (B*nb, F2, 1)

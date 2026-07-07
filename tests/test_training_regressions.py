@@ -225,4 +225,4 @@ def test_loso_skip_train_loads_checkpoint_instead_of_training(monkeypatch, tmp_p
     train_loso.main()
 
     assert calls == {"load": 2, "train": 0}
-    assert (tmp_path / "loso_eegnet_summary.json").exists()
+    assert (tmp_path / "loso_eegnet_seed42_summary.json").exists()
