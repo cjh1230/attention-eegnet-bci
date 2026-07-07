@@ -2,9 +2,9 @@
 
 > **XH-202610** · 挑战杯 2026 · `master` [![tests](https://img.shields.io/badge/tests-745%20passed-brightgreen)]()
 
-面向 8 通道 DeepBCI 的少通道运动想象 BCI 多方法对比与在线闭环系统。使用 MNE-Python 预处理，对比 EEGNet、EEG Conformer、EEG-TCNet、FBCNet、SPDNet 等深度模型与 Riemannian Geometry 传统强基线，构建 8 通道跨被试 MI 识别、消融实验与在线闭环原型。
+面向 8 通道 DeepBCI 的少通道运动想象 BCI 算法研究。提出 **BRT-Det**（证据检测）和 **FB-ER-MI**（证据推理）两个自研轻量模型，与 EEG Conformer、EEG-TCNet、FBCNet、SPDNet 等深度模型及 Riemannian Geometry 传统基线进行系统对比。构建了从预处理、LOSO 验证、消融实验到在线闭环原型的完整管线。
 
-**关键词**：运动想象 · EEGNet · EEG Conformer · EEG-TCNet · SPDNet · 时空注意力 · Riemannian Geometry · FBCNet · 域泛化 · LOSO 交叉验证 · EUCLIDEAN ALIGNMENT · 在线闭环 · 空闲门控
+**关键词**：运动想象 · 证据检测 · 证据推理 · BRT-Det · FB-ER-MI · EEGNet · EEG Conformer · LOSO 交叉验证 · 频带门控 · 多模型融合
 
 ---
 
@@ -41,28 +41,21 @@ python main.py demo --source replay --data data/loso_binary/subj_01/X.npy \
 | Rank | 方法 | 类型 | Accuracy | Kappa |
 |------|------|------|----------|-------|
 | 1 | **EEG Conformer + EA** ✓ | DL + Transformer | **64.22%** ± 9.86% | 0.283 |
-| 2 | **EEG-TCNet + EA** ✓ | DL + TCN | **63.85%** ± 11.73% | 0.276 |
-| 3 | **ER-MI + EA** ✓★ | DL + GRU Reasoning | **62.55%** ± 0.92% | 0.246 |
-| 4 | **FBCNet + EA** | DL + Filter Bank | **61.11%** ± 11.69% | 0.219 |
-| 5 | Tangent Space + LDA + EA | Riemannian | 60.44% ± 9.64% | 0.212 |
-| 6 | Tangent Space + LDA | Riemannian | 60.44% ± 9.64% | 0.212 |
-| 7 | FgMDM + EA (6-band, 8–30Hz) | Riemannian | 59.18% ± 8.12% | 0.180 |
-| 8 | **SPDNet + EA** (seed42) | DL + SPD Manifold | **58.52%** ± 8.38% | 0.161 |
-| 9 | EEGNet + EA | DL | 58.00% ± 10.06% | 0.161 |
-| 10 | EEGNet + SpatiotemporalAttn + EA | DL + Attention | 57.78% ± 8.55% | 0.158 |
-| 11 | MDM + EA | Riemannian | 56.22% ± 10.52% | 0.127 |
-| 12 | MAA-EEGNet-Pre + EA ⚠️ | DL + MAA | 56.00% ± 9.42% | 0.121 |
-| 13 | MAA-EEGNet + EA ⚠️ | DL + MAA | 55.33% ± 8.73% | 0.102 |
-| 14 | EEGNet + SpatiotemporalAttn | DL + Attention | 55.04% ± 7.86% | 0.096 |
-| 15 | FB-MAA-EEGNet + EA ⚠️ | DL + FB + MAA | 53.78% ± 7.68% | 0.070 |
-| 16 | EEGNet (no EA) | DL | 51.93% ± 7.20% | 0.033 |
-| 17 | SPDNet (no EA) | DL + SPD Manifold | 50.59% ± 1.87% | 0.000 |
-| 18 | FBCNet (no EA) | DL + Filter Bank | 49.70% ± 2.66% | -0.010 |
+| 2 | **EEG-TCNet + EA** ✓ | DL + TCN | **63.41%** ± 10.51% | 0.265 |
+| 3 | **BRT-Det v8 + EA** ✓★ | DL + Detection | **63.02%** ± 1.42%† | 0.257 |
+| 4 | **FB-ER-MI + EA** ✓★ | DL + Evidence Reasoning | **63.97%** ± 0.46%†† | 0.277 |
+| 5 | **ER-MI + EA** ✓★ | DL + GRU Reasoning | **62.55%** ± 0.92% | 0.246 |
+| 6 | **FBCNet + EA** | DL + Filter Bank | **61.11%** ± 11.69% | 0.219 |
+| 7 | Tangent Space + LDA + EA | Riemannian | 60.44% ± 9.64% | 0.212 |
+| 8 | FgMDM + EA (6-band, 8–30Hz) | Riemannian | 59.18% ± 8.12% | 0.180 |
+| 9 | **SPDNet + EA** (seed42) | DL + SPD Manifold | **58.52%** ± 8.38% | 0.161 |
+| 10 | EEGNet + EA | DL | 58.00% ± 10.06% | 0.161 |
 
-> ✓ = 3-seed 验证。Conformer 均值 64.22%（63.63/65.56/63.48），TCNet 均值 63.85%（63.85/62.96/64.74），**ER-MI 均值 62.55%（62.30/61.78/63.56）**。
-> ★ = 新增算法 (2026-07-04)。ER-MI 以 EEGNet encoder + GRU 多步推理超越 FBCNet (+1.44pp) 和 Tangent (+2.11pp)，3-seed 标准差仅 ±0.92%（跨 seed 极稳定）。消融: steps=1→3→5: 62.15→62.30→61.85%, 中间监督权重消融进行中。
-
-> **核心发现**: 深度模型可以超越传统 Riemannian 基线。EEG Conformer + EA（3-seed 均值 64.22%）和 EEG-TCNet + EA（63.85%）均超过 Tangent Space + LDA + EA（60.44%），全部 6 个 seed 验证。SPDNet + EA（58.52%）首次在 8ch MI 上验证了 SPD 流形深度学习的可行性。FBCNet 20-shot 校准达 **69.42%**（项目最高分）。EA 增益与架构内部归一化强度负相关：FBCNet（无归一化）+11.41pp → SPDNet（无归一化）+7.93pp → EEGNet（BN）+6.07pp → Conformer/TCNet（LN+残差）+2.3~2.9pp → Tangent（仿射不变）±0pp。但 EA 增益也依赖数据集被试间变异性——BCI IV 2a 上 FBCNet 增益从 +11.41pp 缩至 +1.35pp。详细分析见 [EA × Architecture Interaction Analysis](docs/ea_analysis.md)。
+> ★ = 自研算法。**BRT-Det v8** (Band-Region-Time Evidence Detector, 32K params) 将 MI 解码重构为 band-channel-time 网格上的分布式证据检测。**FB-ER-MI** (Filter-Bank Evidence Reasoning Network, 52K params) 将滤波器组证据提取与两步循环推理结合。二者互补性 r<0.5，fixed ensemble (α=0.5) 达 **66.00%**（seed42）。
+> 
+> † BRT-Det ±1.42% = 3-seed std（seed 间标准差）。†† FB-ER-MI ±0.46% = 3-seed std。
+> 
+> **核心发现**: (1) 深度模型超越传统 Riemannian 基线。(2) Filter Bank + Band Gate 是自研模型的最大突破——同时作用于 BRT-Det 和 ER-MI，主要涨准确率，gate 改善跨被试稳定性。(3) BRT-Det 和 FB-ER-MI 错误模式互补，双模型融合达 66.00%。(4) 跨被试方差是主要瓶颈，3/30 被试 κ<0。
 
 ### SPDNet 消融实验
 
@@ -76,20 +69,28 @@ python main.py demo --source replay --data data/loso_binary/subj_01/X.npy \
 
 > SPDNet 训练对随机种子敏感；受控种子下收敛但波动较大（seed42: 58.52%, seed123: 59.56%, seed456: 61.48%, 极差 2.96pp）。默认种子可能 collapse 到多数类（50.44%, κ≈0.02）。无 EA 时所有 SPDNet 均 collapse（κ≈0），EA 对 SPDNet 比 CNN 更加关键。
 
+### Ensemble 融合（seed42, EA）
+
+| 融合方案 | FB-ER-MI | BRT-Det v8 | Ensemble | Gain |
+|------|:---:|:---:|:---:|:---:|
+| Conformer + BRT-Det (α=0.7) | — | — | 64.37% | +0.96pp |
+| **FB-ER-MI + BRT-Det (α=0.5)** | 64.74% | 62.52% | **66.00%** | **+1.26pp** |
+| Oracle (7 models) | — | — | 71.04% | — |
+| Oracle (3 自研) | — | — | 69.04% | — |
+
+> 固定权重融合已确认互补性。下一步：adaptive routing → few-shot calibration → 逼近 70%。
+
 ### Few-shot Calibration (seed 42)
 
-| Calibration Trials/Class | Conformer + EA | TCNet + EA | FBCNet + EA |
-|--------------------------|:---:|:---:|:---:|
-| 0 (pure LOSO) | 65.33% | 62.37% | 62.67% |
-| 5 | 66.38% | 66.57% | 66.10% |
-| 10 | **67.47%** | 67.07% | 67.87% |
-| 20 | 66.38% | 67.83% | **69.42%** |
-| 40 | 66.67% | 67.10% | 68.84% |
-| **Δ (0→best)** | +2.14pp | +5.46pp | +6.75pp |
+| Calibration Trials/Class | Conformer + EA | TCNet + EA | FBCNet + EA | BRT-Det v8 + EA |
+|--------------------------|:---:|:---:|:---:|:---:|
+| 0 (pure LOSO) | 65.33% | 62.37% | 62.67% | 62.30% |
+| 5 | 66.38% | 66.57% | 66.10% | 63.14% |
+| 10 | **67.47%** | 67.07% | 67.87% | 63.60% |
+| 20 | 66.38% | 67.83% | **69.42%** | **64.64%** |
+| 40 | 66.67% | 67.10% | 68.84% | — |
 
-> **关键发现**: Conformer 零样本最强（65.33%），TCNet/FBCNet 需校准才能追上。
-> FBCNet 20-shot 达 **69.42%**（项目最高分）—— 其方差池化层在校准数据帮助下精准捕捉个体频带特征。
-> 选择建议：零样本部署→Conformer；有校准数据→FBCNet 20-shot；稳定提升→TCNet。
+> FBCNet 20-shot 达 69.42%（项目最高分）。BRT-Det few-shot 提升温和（+2.34pp），collapse 被试无改善。
 
 ### Riemannian 协方差估计器与度量 Sweep
 
@@ -107,14 +108,13 @@ python main.py demo --source replay --data data/loso_binary/subj_01/X.npy \
 | 方法 | 类型 | Accuracy | Kappa |
 |------|------|----------|-------|
 | **EEGNet (base)** | DL | **39.47%** ± 12.45% | 0.193 |
-| **FBCNet + EA** | DL + Filter Bank | **39.51%** ± 12.21% | 0.193 |
 | Tangent Space + LDA + EA | Riemannian | 38.60% ± 12.44% | 0.181 |
-| **FBCNet (no EA)** | DL + Filter Bank | 38.16% ± 10.78% | 0.175 |
 | EEGNet + SpatiotemporalAttn | DL | 36.94% ± 11.78% | 0.159 |
+| **BRT-Det v8 + EA** ★ | DL + Detection | **36.38%** ± 9.44% | 0.152 |
 | FgMDM + EA | Riemannian | 34.91% ± 8.48% | 0.132 |
 | MDM + EA | Riemannian | 33.43% ± 10.92% | 0.112 |
 
-> Chance level: PhysioNet 50% (binary), BCI IV 2a 25% (4-class).
+> Chance level: PhysioNet 50% (binary), BCI IV 2a 25% (4-class). ★ = 自研算法。
 
 ---
 
@@ -217,6 +217,9 @@ EA 增益 = f(架构内部归一化 × 数据集被试间变异性)
 │   ├── eeg_conformer.py            #   EEG Conformer (CNN + Transformer, Song 2023)
 │   ├── eeg_tcnet.py                #   EEG-TCNet (CNN + TCN, Ingolfsson 2020)
 │   ├── fbcnet.py                   #   FBCNet (Filter-Bank CNN, Bakshi 2021)
+│   ├── brt_det.py                  # ★ BRT-Det (Band-Region-Time Evidence Detector)
+│   ├── er_mi.py                    # ★ ER-MI / FB-ER-MI (Evidence Reasoning Network)
+│   ├── er_mi_v2.py                 # ★ ER-MI v2 (multi-token evidence)
 │   ├── fb_tcnet.py                 # ★ FB-TCNet (Filter Bank + TCN, 本项目原创)
 │   ├── spd_models.py               # ★ SPDNet (SPD 流形 DL, Huang & Van Gool 2017)
 │   ├── motor_area_attention.py     #   Motor-Area Attention (8ch 区域分组注意力)
@@ -264,14 +267,18 @@ EA 增益 = f(架构内部归一化 × 数据集被试间变异性)
 │   ├── analyze_spdnet_vs_tangent.py  # ★ SPDNet vs Tangent 对比分析
 │   ├── visualize_evidence.py      # ★ BRT-Det evidence heatmaps (band×ch×time)
 │   ├── visualize_cat.py           # ★ Class Activation Topography (GradCAM + MNE topomaps)
+│   ├── analyze_model_comparison.py # ★ 模型 error overlap 分析 (scatter + 4-quadrant)
+│   ├── analyze_multi_model_oracle.py # ★ 7-model oracle upper bound 分析
+│   ├── ensemble_eval.py           # ★ 单折 logits ensemble 测试
+│   ├── ensemble_loso.py           # ★ 全 LOSO ensemble benchmark
+│   ├── diagnose_er_mi_k.py        # ★ ER-MI K sweep 诊断
 │   └── make_paper_figures.py       # ★ 论文图表生成 (6 figures + 统计检验)
 ├── docs/                           # ★ 研究文档与论文草稿
+│   ├── brt_det_development.md      #   BRT-Det 完整开发日志 (40+ 实验)
+│   ├── er_mi_development.md        #   ER-MI 完整开发日志 (Phase 1)
 │   ├── ea_analysis.md              #   EA 增益双因素分析
 │   ├── paper_draft.md              #   论文草稿
-│   ├── TECHNICAL_REPORT.md         #   技术报告
-│   ├── research_proposal.md        #   研究计划
-│   ├── neural_sde_research_plan.md #   Neural SDE 研究计划
-│   └── spd_ssl_research_plan.md    #   SPD SSL 研究计划
+│   └── TECHNICAL_REPORT.md         #   技术报告
 ├── tests/                          # 745 个单元测试 (40 文件)
 ├── main.py                         # 统一入口 (18 个命令)
 ├── environment.yml
@@ -305,8 +312,16 @@ python main.py loso --data_dir data/loso_binary --epochs 80 --align             
 python main.py loso --data_dir data/loso_binary --model eeg_conformer --epochs 80 --align # Conformer 🏆
 python main.py loso --data_dir data/loso_binary --model eeg_tcnet --epochs 80 --align     # TCNet
 python main.py loso --data_dir data/loso_binary --model fbcnet --epochs 80 --align        # FBCNet
-python main.py loso --data_dir data/loso_binary --model fb_maa_eegnet --epochs 80 --align # FB-MAA-EEGNet
-python main.py loso --data_dir data/loso_binary --model maa_eegnet --epochs 80 --align    # MAA-EEGNet
+# ★ 自研模型
+python main.py loso --data_dir data/loso_binary --model brt_det --epochs 80 --align \
+    --label_smoothing 0.1 --model_kwargs '{"use_region_pool":false, "n_time_cells":24, "dilations":[1,2,4], "agg_mode":"objectness", "use_band_gate":true}'  # BRT-Det v8
+python main.py loso --data_dir data/loso_binary --model er_mi --epochs 80 --align \
+    --model_kwargs '{"steps": 2, "use_filter_bank": true, "n_bands": 6}'  # FB-ER-MI
+# ★ 自研融合
+python scripts/ensemble_loso.py --data_dir data/loso_binary --n_subjects 30 --epochs 80 \
+    --seed 42 --alpha 0.5 --align --model_a er_mi --model_b brt_det \
+    --model_a_kwargs '{"steps": 2, "use_filter_bank": true, "n_bands": 6}' \
+    --model_b_kwargs '{"use_region_pool":false, "n_time_cells":24, "dilations":[1,2,4], "agg_mode":"objectness", "use_band_gate":true}'
 # Few-shot calibration
 python main.py loso --data_dir data/loso_binary --model eeg_conformer --epochs 80 --align --finetune_sweep 0,5,10,20,40
 
@@ -376,6 +391,19 @@ black . && ruff check .              # 格式化 + Lint
 
 ## 模型
 
+### 自研模型：证据检测 + 证据推理
+
+本项目提出两个互补的自研轻量模型，构成"局部证据检测 + 全局证据推理"的双模型框架：
+
+| 模型 | 定位 | 3-seed Acc | 参数 | 核心创新 |
+|------|------|:---:|:---:|------|
+| **BRT-Det v8** | 局部分布式证据检测 | 63.02% ± 1.42% | 32K | band-channel-time 检测网格 + objectness 聚合 + Band Gate |
+| **FB-ER-MI** | 全局证据推理 | 63.97% ± 0.46% | 52K | Filter Bank + Band Gate + GRU 两步推理 |
+
+**共同突破**: Filter Bank + Band Gate 是两个模型的最大增益来源——滤波器组提升准确率，频带门控改善跨被试鲁棒性。与 BRT-Det 的 Band Gate 发现完全一致。
+
+**互补性**: 二者最优被试几乎不相交，相关性 r<0.5。固定权重融合（α=0.5）达 **66.00%**，超过任一单模型。
+
 ### 模型库总览
 
 | 模型 | 类型 | 论文 | 特点 |
@@ -385,6 +413,8 @@ black . && ruff check .              # 格式化 + Lint
 | `eeg_conformer` | DL + Transformer | Song et al. 2023 | CNN 骨干 + Transformer Encoder |
 | `eeg_tcnet` | DL + TCN | Ingolfsson et al. 2020 | EEGNet Block1 + 时序卷积网络 |
 | `fbcnet` | DL + Filter Bank | Bakshi et al. 2021 | 多频段 + 逐频段空域卷积 + 方差池化 |
+| `brt_det` | DL + Detection | 本项目 (2026) | Band-Region-Time 证据检测器，band gate + objectness 聚合 |
+| `er_mi` | DL + Evidence | 本项目 (2026) | Evidence Reasoning Network，GRU 多步推理 |
 | `fb_tcnet` | DL + FB + TCN | 本项目 (2026) | Filter Bank + TCN 时序建模 + EA |
 | `spdnet` | DL + SPD Manifold | Huang & Van Gool 2017 | SPD 流形上的 BiMap/ReEig/LogEig 层 |
 | `fb_maa_eegnet` | DL + FB + MAA | 本项目 | Filter Bank + 运动区注意力 + EEGNet |
@@ -491,6 +521,8 @@ DataSource (EEGSource Protocol)
 - He, H. & Wu, D. (2018). Transfer Learning for BCI: A Euclidean Space Data Alignment Approach. *arXiv:1808.05464*.
 - Ang, K. K., et al. (2008). Filter Bank Common Spatial Pattern (FBCSP). *Int. Joint Conf. Neural Networks*.
 - Zhou, K., et al. (2021). MixStyle: Domain Generalization via Feature Statistics Mixing. *ICLR*.
+- **BRT-Det**: Band-Region-Time Evidence Detector for MI-BCI. 本项目原创 (XH-202610, 2026). 开发日志: `docs/brt_det_development.md`
+- **FB-ER-MI**: Filter-Bank Evidence Reasoning Network for MI-BCI. 本项目原创 (XH-202610, 2026). 开发日志: `docs/er_mi_development.md`
 - PhysioNet: [EEG Motor Movement/Imagery Dataset](https://physionet.org/content/eegmmidb/)
 - BCI Competition IV 2a: [BNCI Horizon 2020](http://bnci-horizon-2020.eu/database/data-sets)
 - MNE-Python: [mne.tools](https://mne.tools)
