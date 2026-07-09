@@ -6,6 +6,7 @@ Usage:
     python scripts/ensemble_eval.py --data_dir data/loso_binary \
         --test_subject 13 --epochs 80 --alpha_sweep 0.0,0.3,0.5,0.7,1.0
 """
+
 import argparse
 import copy
 import json
@@ -73,13 +74,18 @@ def main():
     parser.add_argument("--test_subject", type=int, required=True)
     parser.add_argument("--epochs", type=int, default=80)
     parser.add_argument("--device", default=None)
-    parser.add_argument("--alpha_sweep", type=str, default="0.0,0.2,0.3,0.4,0.5,0.6,0.7,0.8,1.0")
+    parser.add_argument(
+        "--alpha_sweep", type=str, default="0.0,0.2,0.3,0.4,0.5,0.6,0.7,0.8,1.0"
+    )
     parser.add_argument("--model_a", default="eeg_conformer", help="Model A (raw EEG)")
     parser.add_argument("--model_b", default="brt_det", help="Model B (filter bank)")
-    parser.add_argument("--model_b_kwargs", type=str,
-                        default='{"use_region_pool":false, "n_time_cells":24, '
-                                '"dilations":[1,2,4], "agg_mode":"objectness", '
-                                '"use_band_gate":true}')
+    parser.add_argument(
+        "--model_b_kwargs",
+        type=str,
+        default='{"use_region_pool":false, "n_time_cells":24, '
+        '"dilations":[1,2,4], "agg_mode":"objectness", '
+        '"use_band_gate":true}',
+    )
     parser.add_argument("--label_a", default="Conformer")
     parser.add_argument("--label_b", default="BRT-Det")
     args = parser.parse_args()
@@ -97,8 +103,9 @@ def main():
         sys.exit(1)
     train_subjs = [s for s in subjects if s["id"] != args.test_subject]
 
-    print(f"Test subject: S{args.test_subject:02d} "
-          f"(trials={test_subj['X'].shape[0]})")
+    print(
+        f"Test subject: S{args.test_subject:02d} " f"(trials={test_subj['X'].shape[0]})"
+    )
     print(f"Train subjects: {len(train_subjs)}")
     print(f"Ensemble weights: {alphas}")
     print(f"Model A: {args.label_a} ({args.model_a})")
@@ -108,18 +115,31 @@ def main():
     print(f"\n-- Training {args.label_a} --")
     n_channels = test_subj["X"].shape[1]
     n_classes = len(np.unique(test_subj["y"]))
-    model_a = create_model(args.model_a, n_channels=n_channels,
-                           n_classes=n_classes).to(device)
-    model_a = train_on_subjects(train_subjs, args.model_a, device,
-                                epochs=args.epochs, batch_size=64, lr=1e-3,
-                                label_smoothing=0.1)
+    model_a = create_model(args.model_a, n_channels=n_channels, n_classes=n_classes).to(
+        device
+    )
+    model_a = train_on_subjects(
+        train_subjs,
+        args.model_a,
+        device,
+        epochs=args.epochs,
+        batch_size=64,
+        lr=1e-3,
+        label_smoothing=0.1,
+    )
 
     # Train model B (BRT-Det — filter bank input)
     print(f"\n-- Training {args.label_b} --")
-    model_b = train_on_subjects(train_subjs, args.model_b, device,
-                                epochs=args.epochs, batch_size=64, lr=1e-3,
-                                model_kwargs=model_b_kwargs,
-                                label_smoothing=0.1)
+    model_b = train_on_subjects(
+        train_subjs,
+        args.model_b,
+        device,
+        epochs=args.epochs,
+        batch_size=64,
+        lr=1e-3,
+        model_kwargs=model_b_kwargs,
+        label_smoothing=0.1,
+    )
 
     # Evaluate each model alone
     print(f"\n-- Ensemble Sweep --")
@@ -174,12 +194,23 @@ def main():
         if acc > best_acc:
             best_acc = acc
             best_alpha = alpha
-        print(f"  alpha={alpha:.1f} ({args.label_a}={alpha:.1f}, "
-              f"{args.label_b}={1-alpha:.1f}): acc={acc:.4f}{marker}")
+        print(
+            f"  alpha={alpha:.1f} ({args.label_a}={alpha:.1f}, "
+            f"{args.label_b}={1-alpha:.1f}): acc={acc:.4f}{marker}"
+        )
 
     gain = best_acc - max(acc_a, acc_b)
-    print(f"\n  Best ensemble: alpha={best_alpha:.1f}, acc={best_acc:.4f} "
-          f"(gain={gain:+.4f} over best single)")
+    print(
+        f"\n  Best ensemble: alpha={best_alpha:.1f}, acc={best_acc:.4f} "
+        f"(gain={gain:+.4f} over best single)"
+    )
+    print(
+        "\n  [!] OPTIMISTIC BIAS: best_alpha was selected on THIS held-out test\n"
+        "      subject, so best_acc is a test-set-tuned upper bound, NOT an\n"
+        "      unbiased estimate. Do not report it as a headline result. For\n"
+        "      valid numbers, fix alpha on training subjects and use\n"
+        "      scripts/ensemble_loso.py (fixed-alpha LOSO)."
+    )
 
     del model_a, model_b
 

@@ -20,7 +20,7 @@ from torch.utils.data import DataLoader, TensorDataset
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from models.eegnet_attn import create_model
+from training.train_eegnet import load_checkpoint as _load_ckpt_model
 from utils.metrics import (
     classification_report,
     per_class_recall,
@@ -48,31 +48,30 @@ def load_per_subject_data(data_dir: str, n_subjects: int) -> list[dict]:
 
 
 def load_checkpoint(path: str, device: str):
-    """Load a trained model from checkpoint."""
+    """Load a trained model (any supported architecture) + its config.
+
+    Delegates architecture resolution and lazy-classifier warmup to
+    ``training.train_eegnet.load_checkpoint``, which reads the model type from
+    the checkpoint (or infers it from the filename) instead of assuming EEGNet.
+    """
     ckpt = torch.load(path, map_location=device, weights_only=False)
-    cfg = ckpt["config"]
-    model = create_model(
-        "eegnet",  # default arch; override if stored in ckpt
-        n_channels=cfg["n_channels"],
-        n_classes=cfg["n_classes"],
-    ).to(device)
-    # Warm up lazy classifier
-    model.eval()
-    with torch.no_grad():
-        model(torch.zeros(1, cfg["n_channels"], 750, device=device))
-    model.load_state_dict(ckpt["state_dict"])
-    print(f"Loaded checkpoint epoch={ckpt['epoch']} acc={ckpt['acc']:.4f}")
-    return model, cfg
+    model = _load_ckpt_model(path, device)
+    return model, ckpt["config"]
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Subject-wise evaluation from checkpoint")
+    parser = argparse.ArgumentParser(
+        description="Subject-wise evaluation from checkpoint"
+    )
     parser.add_argument("--checkpoint", required=True, help="Path to .pt checkpoint")
     parser.add_argument("--data_dir", default="data/loso_binary")
     parser.add_argument("--n_subjects", type=int, default=30)
     parser.add_argument("--output_dir", default="results")
-    parser.add_argument("--dataset", default="physionet_mi",
-                        choices=["physionet_mi", "bci_iv_2a", "deepbci"])
+    parser.add_argument(
+        "--dataset",
+        default="physionet_mi",
+        choices=["physionet_mi", "bci_iv_2a", "deepbci"],
+    )
     parser.add_argument("--device", default=None)
     args = parser.parse_args()
 
@@ -91,11 +90,20 @@ def main():
         cls_names = get_class_names(args.dataset)
     except ValueError:
         cls_names = [str(i) for i in range(cfg["n_classes"])]
+    # Binary PhysioNet MI: labels are [left, right], not [rest, left, right]
+    if args.dataset == "physionet_mi" and cfg["n_classes"] == 2:
+        cls_names = ["Left Hand", "Right Hand"]
 
     results = []
     for subj in subjects:
+        X_subj = subj["X"]
+        # Filter-bank models (FBCNet etc.) need multi-band input
+        if getattr(model, "input_requires_filter_bank", False):
+            from models.fbcnet import apply_filter_bank
+
+            X_subj = apply_filter_bank(X_subj)
         test_ds = TensorDataset(
-            torch.from_numpy(subj["X"]).float(),
+            torch.from_numpy(X_subj).float(),
             torch.from_numpy(subj["y"]).long(),
         )
         test_loader = DataLoader(test_ds, batch_size=64)
@@ -130,7 +138,9 @@ def main():
             row[f"specificity_{label}"] = val
 
         results.append(row)
-        print(f"  S{subj['id']:02d}: acc={metrics['accuracy']:.4f}  f1={metrics['f1_macro']:.4f}")
+        print(
+            f"  S{subj['id']:02d}: acc={metrics['accuracy']:.4f}  f1={metrics['f1_macro']:.4f}"
+        )
 
     # Export
     output_dir = Path(args.output_dir)

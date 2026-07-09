@@ -21,6 +21,7 @@ Usage:
 
 Expected result: Within-subject MI binary typically 75-90% (vs 63% cross-subject).
 """
+
 import argparse
 import copy
 import csv
@@ -91,34 +92,41 @@ def train_on_subjects(
 
     if augment:
         from preprocessing.augment import augment_dataset
+
         X_all, y_all = augment_dataset(X_all, y_all, factor=2, seed=seed)
         print(f"  Augmented: X={X_all.shape}, y={y_all.shape}")
 
     n_channels = X_all.shape[1]
     n_classes = len(np.unique(y_all))
 
-    model = create_model(model_type, n_channels=n_channels, n_classes=n_classes,
-                         **(model_kwargs or {})).to(device)
+    model = create_model(
+        model_type, n_channels=n_channels, n_classes=n_classes, **(model_kwargs or {})
+    ).to(device)
 
     # Multi-band preprocessing (FBCNet)
     if getattr(model, "input_requires_filter_bank", False):
         from models.fbcnet import apply_filter_bank
+
         X_all = apply_filter_bank(X_all)
 
     train_ds = TensorDataset(
         torch.from_numpy(X_all).float(),
         torch.from_numpy(y_all).long(),
     )
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
-                              generator=torch.Generator().manual_seed(seed))
+    train_loader = DataLoader(
+        train_ds,
+        batch_size=batch_size,
+        shuffle=True,
+        generator=torch.Generator().manual_seed(seed),
+    )
 
     class_weights = compute_class_weight("balanced", classes=np.unique(y_all), y=y_all)
     class_weights = torch.tensor(class_weights, dtype=torch.float32, device=device)
-    criterion = nn.CrossEntropyLoss(weight=class_weights,
-                                     label_smoothing=label_smoothing)
+    criterion = nn.CrossEntropyLoss(
+        weight=class_weights, label_smoothing=label_smoothing
+    )
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr,
-                                  weight_decay=weight_decay)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
 
     for epoch in range(1, epochs + 1):
@@ -146,23 +154,26 @@ def train_on_subjects(
                 for step_logits in logits[:-1]:
                     loss = loss + intermediate_loss_weight * criterion(step_logits, yb)
             else:
-                loss = criterion(
-                    logits[-1] if isinstance(logits, list) else logits, yb)
+                loss = criterion(logits[-1] if isinstance(logits, list) else logits, yb)
 
             # Objectness entropy regularization
             if obj_map is not None:
                 # obj_map: (B, nb, S, T_cells) in [0,1]
                 eps = 1e-6
-                obj_reg = -(obj_map * torch.log(obj_map + eps)
-                            + (1 - obj_map) * torch.log(1 - obj_map + eps)).mean()
+                obj_reg = -(
+                    obj_map * torch.log(obj_map + eps)
+                    + (1 - obj_map) * torch.log(1 - obj_map + eps)
+                ).mean()
                 loss = loss + obj_reg_weight * obj_reg
 
             loss.backward()
             optimizer.step()
         scheduler.step()
         if epoch % 20 == 0 or epoch == epochs:
-            print(f"  Epoch {epoch:3d}/{epochs}  lr={scheduler.get_last_lr()[0]:.2e}",
-                  flush=True)
+            print(
+                f"  Epoch {epoch:3d}/{epochs}  lr={scheduler.get_last_lr()[0]:.2e}",
+                flush=True,
+            )
 
     return model
 
@@ -174,6 +185,7 @@ def evaluate_on_subject(model, subject: dict, device: str) -> dict:
 
     if getattr(model, "input_requires_filter_bank", False):
         from models.fbcnet import apply_filter_bank
+
         X_test = apply_filter_bank(X_test)
 
     test_ds = TensorDataset(
@@ -222,6 +234,7 @@ def finetune_on_subject(
 
     if getattr(model, "input_requires_filter_bank", False):
         from models.fbcnet import apply_filter_bank
+
         X = apply_filter_bank(X)
 
     # Split: first n_finetune_trials per class for FT, rest for test
@@ -244,11 +257,14 @@ def finetune_on_subject(
         torch.from_numpy(X_ft).float(),
         torch.from_numpy(y_ft).long(),
     )
-    ft_loader = DataLoader(ft_ds, batch_size=min(16, len(ft_indices)), shuffle=True,
-                           generator=torch.Generator().manual_seed(seed))
+    ft_loader = DataLoader(
+        ft_ds,
+        batch_size=min(16, len(ft_indices)),
+        shuffle=True,
+        generator=torch.Generator().manual_seed(seed),
+    )
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr,
-                                  weight_decay=weight_decay)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     criterion = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
 
     model.train()
@@ -299,53 +315,116 @@ def main():
     parser.add_argument("--epochs", type=int, default=60)
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--model", default="eegnet",
-                        choices=["eegnet", "eegnet_se", "eegnet_mhsa",
-                                 "eegnet_temporal", "eegnet_spatiotemporal",
-                                 "fbcnet", "eeg_tcnet",
-                                 "eeg_conformer", "fb_maa_eegnet",
-                                 "maa_eegnet", "maa_eegnet_pre",
-                                 "fb_tcnet", "spdnet", "er_mi", "er_mi_v2",
-                                 "brt_det"])
-    parser.add_argument("--finetune", type=int, default=0,
-                        help="Few-shot FT trials per class (0 = pure LOSO)")
-    parser.add_argument("--finetune_sweep", type=str, default=None,
-                        help="Comma-separated FT trial counts, e.g. '0,5,10,20,40'. "
-                             "Mutually exclusive with --finetune.")
+    parser.add_argument(
+        "--model",
+        default="eegnet",
+        choices=[
+            "eegnet",
+            "eegnet_se",
+            "eegnet_mhsa",
+            "eegnet_temporal",
+            "eegnet_spatiotemporal",
+            "fbcnet",
+            "eeg_tcnet",
+            "eeg_conformer",
+            "fb_maa_eegnet",
+            "maa_eegnet",
+            "maa_eegnet_pre",
+            "fb_tcnet",
+            "spdnet",
+            "er_mi",
+            "er_mi_v2",
+            "brt_det",
+        ],
+    )
+    parser.add_argument(
+        "--finetune",
+        type=int,
+        default=0,
+        help="Few-shot FT trials per class (0 = pure LOSO)",
+    )
+    parser.add_argument(
+        "--finetune_sweep",
+        type=str,
+        default=None,
+        help="Comma-separated FT trial counts, e.g. '0,5,10,20,40'. "
+        "Mutually exclusive with --finetune.",
+    )
     parser.add_argument("--device", default=None)
-    parser.add_argument("--skip_train", action="store_true",
-                        help="Skip per-fold training (use pre-trained checkpoint)")
-    parser.add_argument("--checkpoint", default=None,
-                        help="Base checkpoint for --skip_train mode")
-    parser.add_argument("--output_dir", default="results",
-                        help="Directory for per-subject CSV and summary JSON")
-    parser.add_argument("--dataset", default="physionet_mi",
-                        choices=["physionet_mi", "bci_iv_2a", "deepbci"],
-                        help="Dataset name for semantic class labels in CSV header")
-    parser.add_argument("--align", action="store_true",
-                        help="Apply Euclidean Alignment (EA) inside each LOSO fold "
-                             "(R_bar computed from training subjects only)")
-    parser.add_argument("--augment", action="store_true",
-                        help="Apply data augmentation (2x) to training data")
-    parser.add_argument("--seed", type=int, default=42,
-                        help="Random seed for reproducibility")
-    parser.add_argument("--model_kwargs", type=str, default=None,
-                        help="JSON string of extra kwargs for create_model(), "
-                             "e.g. '{\"steps\": 5}' for ER-MI")
-    parser.add_argument("--intermediate_loss_weight", type=float, default=0.3,
-                        help="Weight for intermediate step losses in multi-step "
-                             "models like ER-MI. 0.0 disables intermediate supervision. "
-                             "Default 0.3.")
-    parser.add_argument("--label_smoothing", type=float, default=0.0,
-                        help="Label smoothing for CrossEntropyLoss (default 0.0)")
-    parser.add_argument("--weight_decay", type=float, default=0.0,
-                        help="Weight decay for Adam optimizer (default 0.0)")
-    parser.add_argument("--obj_reg_weight", type=float, default=0.0,
-                        help="Objectness entropy regularization weight "
-                             "(0.0 = off, 0.001–0.01 recommended for BRT-Det)")
-    parser.add_argument("--tag", type=str, default=None,
-                        help="Optional tag appended to output filenames to "
-                             "distinguish experiment variants (e.g. 'diff_ch', 'band_gate')")
+    parser.add_argument(
+        "--skip_train",
+        action="store_true",
+        help="Skip per-fold training (use pre-trained checkpoint)",
+    )
+    parser.add_argument(
+        "--checkpoint", default=None, help="Base checkpoint for --skip_train mode"
+    )
+    parser.add_argument(
+        "--output_dir",
+        default="results",
+        help="Directory for per-subject CSV and summary JSON",
+    )
+    parser.add_argument(
+        "--dataset",
+        default="physionet_mi",
+        choices=["physionet_mi", "bci_iv_2a", "deepbci"],
+        help="Dataset name for semantic class labels in CSV header",
+    )
+    parser.add_argument(
+        "--align",
+        action="store_true",
+        help="Apply Euclidean Alignment (EA) inside each LOSO fold "
+        "(R_bar computed from training subjects only)",
+    )
+    parser.add_argument(
+        "--augment",
+        action="store_true",
+        help="Apply data augmentation (2x) to training data",
+    )
+    parser.add_argument(
+        "--seed", type=int, default=42, help="Random seed for reproducibility"
+    )
+    parser.add_argument(
+        "--model_kwargs",
+        type=str,
+        default=None,
+        help="JSON string of extra kwargs for create_model(), "
+        "e.g. '{\"steps\": 5}' for ER-MI",
+    )
+    parser.add_argument(
+        "--intermediate_loss_weight",
+        type=float,
+        default=0.3,
+        help="Weight for intermediate step losses in multi-step "
+        "models like ER-MI. 0.0 disables intermediate supervision. "
+        "Default 0.3.",
+    )
+    parser.add_argument(
+        "--label_smoothing",
+        type=float,
+        default=0.0,
+        help="Label smoothing for CrossEntropyLoss (default 0.0)",
+    )
+    parser.add_argument(
+        "--weight_decay",
+        type=float,
+        default=0.0,
+        help="Weight decay for Adam optimizer (default 0.0)",
+    )
+    parser.add_argument(
+        "--obj_reg_weight",
+        type=float,
+        default=0.0,
+        help="Objectness entropy regularization weight "
+        "(0.0 = off, 0.001–0.01 recommended for BRT-Det)",
+    )
+    parser.add_argument(
+        "--tag",
+        type=str,
+        default=None,
+        help="Optional tag appended to output filenames to "
+        "distinguish experiment variants (e.g. 'diff_ch', 'band_gate')",
+    )
     args = parser.parse_args()
 
     if args.finetune > 0 and args.finetune_sweep:
@@ -353,7 +432,9 @@ def main():
     if args.skip_train and not args.checkpoint:
         parser.error("--skip_train requires --checkpoint.")
     if args.checkpoint and not args.skip_train:
-        print("WARNING: --checkpoint is only used with --skip_train; training will run normally.")
+        print(
+            "WARNING: --checkpoint is only used with --skip_train; training will run normally."
+        )
 
     # Parse model kwargs
     model_kwargs = {}
@@ -376,7 +457,9 @@ def main():
         ft_sweep = [int(x.strip()) for x in args.finetune_sweep.split(",")]
         print(f"Device: {device}  Model: {args.model}  FT sweep: {ft_sweep}")
     else:
-        print(f"Device: {device}  Model: {args.model}  FT: {args.finetune} trials/class")
+        print(
+            f"Device: {device}  Model: {args.model}  FT: {args.finetune} trials/class"
+        )
 
     # Load per-subject data
     subjects = load_per_subject_data(args.data_dir, args.n_subjects)
@@ -386,7 +469,13 @@ def main():
 
     # ── Label validation ──────────────────────────────────────────
     from datasets.label_mapping import validate_labels, class_names as get_class_names
+
     semantic_names = get_class_names(args.dataset)
+    # Binary PhysioNet MI: data labels are [left, right], not [rest, left, right].
+    # Mirrors the override already present in train_spd_loso.py.
+    n_data_classes = len(np.unique(np.concatenate([s["y"] for s in subjects])))
+    if args.dataset == "physionet_mi" and n_data_classes == 2:
+        semantic_names = ["Left Hand", "Right Hand"]
     total_classes = len(semantic_names)
     for subj in subjects:
         if not validate_labels(subj["y"], args.dataset):
@@ -403,7 +492,9 @@ def main():
         train_subjs = [s for s in subjects if s["id"] != test_id]
 
         print(f"\n{'='*50}")
-        print(f"Fold {i+1}/{len(subjects)}: Test=S{test_id:02d}, Train={len(train_subjs)} subjects")
+        print(
+            f"Fold {i+1}/{len(subjects)}: Test=S{test_id:02d}, Train={len(train_subjs)} subjects"
+        )
         print(f"{'='*50}")
 
         # ── Euclidean Alignment (per-fold, no data leakage) ──────────
@@ -413,11 +504,13 @@ def main():
             # Work on fresh dicts to avoid mutating shared subject data
             _train = []
             for s in train_subjs:
-                _train.append({"id": s["id"],
-                               "X": ea.transform(s["X"]), "y": s["y"]})
+                _train.append({"id": s["id"], "X": ea.transform(s["X"]), "y": s["y"]})
             train_subjs = _train
-            test_subj = {"id": test_subj["id"],
-                         "X": ea.transform(test_subj["X"]), "y": test_subj["y"]}
+            test_subj = {
+                "id": test_subj["id"],
+                "X": ea.transform(test_subj["X"]),
+                "y": test_subj["y"],
+            }
 
         # Train on N-1 subjects, or load a fixed base checkpoint for evaluation/FT.
         if args.skip_train:
@@ -426,9 +519,14 @@ def main():
             print(f"  Skip train: loaded {model_type} from {args.checkpoint}")
         else:
             model = train_on_subjects(
-                train_subjs, args.model, device,
-                epochs=args.epochs, batch_size=args.batch_size, lr=args.lr,
-                augment=args.augment, seed=args.seed,
+                train_subjs,
+                args.model,
+                device,
+                epochs=args.epochs,
+                batch_size=args.batch_size,
+                lr=args.lr,
+                augment=args.augment,
+                seed=args.seed,
                 model_kwargs=model_kwargs,
                 intermediate_loss_weight=args.intermediate_loss_weight,
                 label_smoothing=args.label_smoothing,
@@ -444,22 +542,28 @@ def main():
             for ft_n in ft_sweep:
                 if ft_n == 0:
                     metrics = evaluate_on_subject(model, test_subj, device)
-                    print(f"  FT={ft_n:>2d}:  acc={metrics['accuracy']:.4f}  "
-                          f"kappa={metrics['kappa']:.4f}")
+                    print(
+                        f"  FT={ft_n:>2d}:  acc={metrics['accuracy']:.4f}  "
+                        f"kappa={metrics['kappa']:.4f}"
+                    )
                 else:
                     # Fresh model copy for each FT count.
                     model_ft = copy.deepcopy(model)
                     model_ft.load_state_dict(base_state)
                     _, metrics = finetune_on_subject(
-                        model_ft, test_subj,
-                        n_finetune_trials=ft_n, device=device,
+                        model_ft,
+                        test_subj,
+                        n_finetune_trials=ft_n,
+                        device=device,
                         seed=args.seed,
                         intermediate_loss_weight=args.intermediate_loss_weight,
                         label_smoothing=args.label_smoothing,
                         weight_decay=args.weight_decay,
                     )
-                    print(f"  FT={ft_n:>2d}:  acc={metrics['accuracy']:.4f}  "
-                          f"kappa={metrics['kappa']:.4f}")
+                    print(
+                        f"  FT={ft_n:>2d}:  acc={metrics['accuracy']:.4f}  "
+                        f"kappa={metrics['kappa']:.4f}"
+                    )
                     del model_ft
 
                 row[f"acc_ft{ft_n}"] = metrics["accuracy"]
@@ -470,18 +574,25 @@ def main():
             # ── Single FT / pure LOSO mode ─────────────────────────
             if args.finetune > 0:
                 model, metrics = finetune_on_subject(
-                    model, test_subj, n_finetune_trials=args.finetune,
-                    device=device, seed=args.seed,
+                    model,
+                    test_subj,
+                    n_finetune_trials=args.finetune,
+                    device=device,
+                    seed=args.seed,
                     intermediate_loss_weight=args.intermediate_loss_weight,
                     label_smoothing=args.label_smoothing,
                     weight_decay=args.weight_decay,
                 )
-                print(f"  FT+Test: acc={metrics['accuracy']:.4f}  "
-                      f"kappa={metrics['kappa']:.4f}")
+                print(
+                    f"  FT+Test: acc={metrics['accuracy']:.4f}  "
+                    f"kappa={metrics['kappa']:.4f}"
+                )
             else:
                 metrics = evaluate_on_subject(model, test_subj, device)
-                print(f"  Test:    acc={metrics['accuracy']:.4f}  "
-                      f"kappa={metrics['kappa']:.4f}")
+                print(
+                    f"  Test:    acc={metrics['accuracy']:.4f}  "
+                    f"kappa={metrics['kappa']:.4f}"
+                )
 
             row = {
                 "subject": f"S{test_id:02d}",
@@ -492,13 +603,15 @@ def main():
             }
             for cls_id, rec in metrics["per_class_recall"].items():
                 cls_name = (
-                    semantic_names[cls_id] if cls_id < len(semantic_names)
+                    semantic_names[cls_id]
+                    if cls_id < len(semantic_names)
                     else f"cls_{cls_id}"
                 )
                 row[f"recall_{cls_name}"] = rec
             for cls_id, spec in metrics["per_class_specificity"].items():
                 cls_name = (
-                    semantic_names[cls_id] if cls_id < len(semantic_names)
+                    semantic_names[cls_id]
+                    if cls_id < len(semantic_names)
                     else f"cls_{cls_id}"
                 )
                 row[f"specificity_{cls_name}"] = spec
@@ -518,7 +631,10 @@ def main():
     if ft_sweep is not None:
         # ── FT Sweep CSV ────────────────────────────────────────────
         sweep_tag = f"_ftsweep{ea_tag}"
-        csv_path = output_dir / f"loso_{args.model}{ds_tag}{sweep_tag}{seed_tag}{variant_tag}.csv"
+        csv_path = (
+            output_dir
+            / f"loso_{args.model}{ds_tag}{sweep_tag}{seed_tag}{variant_tag}.csv"
+        )
 
         if per_subject_results:
             fieldnames = list(per_subject_results[0].keys())
@@ -558,11 +674,17 @@ def main():
             summary[f"ft{ft_n}_acc_mean"] = round(float(vals.mean()), 4)
             summary[f"ft{ft_n}_acc_std"] = round(float(vals.std()), 4)
             print(f"FT={ft_n:>2d}:  acc={vals.mean():.4f} ± {vals.std():.4f}")
-        json_path = output_dir / f"loso_{args.model}{ds_tag}{sweep_tag}{seed_tag}{variant_tag}_summary.json"
+        json_path = (
+            output_dir
+            / f"loso_{args.model}{ds_tag}{sweep_tag}{seed_tag}{variant_tag}_summary.json"
+        )
 
     else:
         # ── Single FT / pure LOSO CSV ───────────────────────────────
-        csv_path = output_dir / f"loso_{args.model}{ds_tag}{ft_tag}{ea_tag}{seed_tag}{variant_tag}.csv"
+        csv_path = (
+            output_dir
+            / f"loso_{args.model}{ds_tag}{ft_tag}{ea_tag}{seed_tag}{variant_tag}.csv"
+        )
         if per_subject_results:
             fieldnames = list(per_subject_results[0].keys())
             with open(csv_path, "w", newline="") as f:
@@ -592,7 +714,10 @@ def main():
         print(f"Kappa:     mean={kappas.mean():.4f}  std={kappas.std():.4f}")
         print(f"Per-subject: {[f'{a:.3f}' for a in accs]}")
         print(f"Best/Worst: {accs.max():.4f} / {accs.min():.4f}")
-        json_path = output_dir / f"loso_{args.model}{ds_tag}{ft_tag}{ea_tag}{seed_tag}{variant_tag}_summary.json"
+        json_path = (
+            output_dir
+            / f"loso_{args.model}{ds_tag}{ft_tag}{ea_tag}{seed_tag}{variant_tag}_summary.json"
+        )
 
     with open(json_path, "w") as f:
         json.dump(summary, f, indent=2)

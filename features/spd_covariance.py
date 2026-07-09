@@ -105,9 +105,7 @@ def compute_covariance(
     elif estimator == "lwf":
         return compute_covariance_lwf(X)
     else:
-        raise ValueError(
-            f"Unknown estimator '{estimator}'. Choose 'scm' or 'lwf'."
-        )
+        raise ValueError(f"Unknown estimator '{estimator}'. Choose 'scm' or 'lwf'.")
 
 
 def is_spd(C: np.ndarray, tol: float = 1e-10) -> np.ndarray:
@@ -237,9 +235,7 @@ def augment_covariance_channel_dropout(
     """
     *batch, C_in, _ = C.shape
     keep = C_in - n_drop
-    kept_idx = np.sort(
-        np.random.choice(C_in, size=keep, replace=False)
-    )
+    kept_idx = np.sort(np.random.choice(C_in, size=keep, replace=False))
 
     # Extract sub-matrix for kept channels
     C_sub = C[..., kept_idx[:, None], kept_idx]
@@ -260,9 +256,7 @@ def augment_covariance_channel_dropout(
     return C_aug
 
 
-def augment_covariance_perturb(
-    C: np.ndarray, scale: float = 0.05
-) -> np.ndarray:
+def augment_covariance_perturb(C: np.ndarray, scale: float = 0.05) -> np.ndarray:
     """Add small symmetric perturbation, preserving SPD property.
 
     C_aug = C + eps  where eps is symmetric and C_aug stays SPD.
@@ -296,9 +290,7 @@ def augment_covariance_perturb(
     return C_aug.astype(np.float32)
 
 
-def augment_temporal_crop(
-    X: np.ndarray, crop_ratio: float = 0.8
-) -> np.ndarray:
+def augment_temporal_crop(X: np.ndarray, crop_ratio: float = 0.8) -> np.ndarray:
     """Randomly crop temporal window from raw EEG trials.
 
     Parameters
@@ -315,7 +307,7 @@ def augment_temporal_crop(
     starts = np.random.randint(0, T - new_T + 1, size=N)
     X_crop = np.empty((N, C, new_T), dtype=X.dtype)
     for i in range(N):
-        X_crop[i] = X[i, :, starts[i]:starts[i] + new_T]
+        X_crop[i] = X[i, :, starts[i] : starts[i] + new_T]
     return X_crop
 
 
@@ -416,7 +408,10 @@ def compute_covariance_shrinkage(
             d = C
             # OAS formula: rho = (1 - 2/d) * tr(S^2) + tr(S)^2
             rho = ((1.0 - 2.0 / d) * trS2 + trS**2) / (T * (trS2 - trS**2 / d) + 1e-15)
-            alpha_oas = min(rho / (1.0 + rho), 1.0)
+            # Clip to [0, 1]: the upper bound keeps shrinkage valid, and the
+            # lower bound prevents a negative alpha (from extreme/degenerate
+            # numerics) that would break the SPD guarantee.
+            alpha_oas = float(np.clip(rho / (1.0 + rho), 0.0, 1.0))
             alpha_use = alpha_oas
         else:
             alpha_use = alpha
@@ -454,7 +449,7 @@ def geodesic_mixup(
         lam = np.random.uniform(0.3, 0.7)  # biased toward center for stability
 
     # Matrix sqrt and inv-sqrt via eigh (handle batch via loop for simplicity)
-    is_scalar = (C1.ndim == 2)
+    is_scalar = C1.ndim == 2
     if is_scalar:
         C1 = C1[np.newaxis, ...]
         C2 = C2[np.newaxis, ...]
@@ -466,11 +461,13 @@ def geodesic_mixup(
     for b in range(B):
         c1, c2 = C1[b], C2[b]
         lb = lam if np.isscalar(lam) else lam[b]
-        e1, v1 = np.linalg.eigh(c1); e1 = np.maximum(e1, 1e-10)
+        e1, v1 = np.linalg.eigh(c1)
+        e1 = np.maximum(e1, 1e-10)
         s = v1 @ np.diag(np.sqrt(e1)) @ v1.T
         is_ = v1 @ np.diag(1.0 / np.sqrt(e1)) @ v1.T
         mid = is_ @ c2 @ is_
-        em, vm = np.linalg.eigh(mid); em = np.maximum(em, 1e-10)
+        em, vm = np.linalg.eigh(mid)
+        em = np.maximum(em, 1e-10)
         mid_l = vm @ np.diag(em**lb) @ vm.T
         C_mix[b] = s @ mid_l @ s
 

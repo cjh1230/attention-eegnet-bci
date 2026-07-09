@@ -12,7 +12,9 @@ Data format expected:
     X_val.npy    — (N, C, T) float32
     y_val.npy    — (N,)    int
 """
+
 import argparse
+import random
 import sys
 from pathlib import Path
 
@@ -139,7 +141,9 @@ class LabelSmoothingCrossEntropy(nn.Module):
             true_dist = torch.zeros_like(logits)
             true_dist.fill_(self.smoothing / (n_classes - 1))
             true_dist.scatter_(1, target.unsqueeze(1), 1.0 - self.smoothing)
-        return torch.mean(torch.sum(-true_dist * torch.log_softmax(logits, dim=-1), dim=-1))
+        return torch.mean(
+            torch.sum(-true_dist * torch.log_softmax(logits, dim=-1), dim=-1)
+        )
 
 
 class FocalLoss(nn.Module):
@@ -187,11 +191,22 @@ def train(
     loss_type: str = "ce",
 ):
     # ---- Setup ----
+    # Reproducibility: seed all RNGs. Previously unseeded, so runs were
+    # non-deterministic and inconsistent with the seeded LOSO scripts.
+    random.seed(42)
+    np.random.seed(42)
+    torch.manual_seed(42)
+    torch.cuda.manual_seed_all(42)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
-    print(f"Model: {model_type}  Augment: {augment}  Mixup: {mixup_alpha}  "
-          f"LabelSmooth: {label_smoothing}  Loss: {loss_type}")
+    print(
+        f"Model: {model_type}  Augment: {augment}  Mixup: {mixup_alpha}  "
+        f"LabelSmooth: {label_smoothing}  Loss: {loss_type}"
+    )
     print(f"GradClip: {grad_clip}  EarlyStop: {early_stop}  KFold: {kfold}")
 
     X_train, y_train, X_val, y_val = load_data(data_dir)
@@ -205,6 +220,7 @@ def train(
     # ---- Augmentation (applied once before training) ----
     if augment:
         from preprocessing.augment import augment_dataset
+
         print("Applying data augmentation...")
         X_train, y_train = augment_dataset(X_train, y_train, factor=2, seed=42)
         print(f"  Augmented: X={X_train.shape}, y={y_train.shape}")
@@ -212,6 +228,13 @@ def train(
     # ---- KFold cross-validation ----
     if kfold > 1:
         print(f"\nRunning {kfold}-fold cross-validation...")
+        print(
+            "  [!] NOTE: TRIAL-LEVEL split on aggregated multi-subject data —\n"
+            "      the same subject's trials appear in train AND val, so these\n"
+            "      scores are subject-MIXED and OVERESTIMATE cross-subject\n"
+            "      generalization. Use training/train_loso.py for a valid LOSO\n"
+            "      (leave-one-subject-out) estimate."
+        )
         skf = StratifiedKFold(n_splits=kfold, shuffle=True, random_state=42)
         fold_scores = []
         X_all = np.concatenate([X_train, X_val], axis=0)
@@ -221,33 +244,69 @@ def train(
             X_tr, X_va = X_all[train_idx], X_all[val_idx]
             y_tr, y_va = y_all[train_idx], y_all[val_idx]
             fold_acc = _train_one_fold(
-                X_tr, y_tr, X_va, y_va,
-                model_type, n_channels, n_classes, device,
-                epochs, batch_size, lr, label_smoothing, grad_clip, early_stop,
+                X_tr,
+                y_tr,
+                X_va,
+                y_va,
+                model_type,
+                n_channels,
+                n_classes,
+                device,
+                epochs,
+                batch_size,
+                lr,
+                label_smoothing,
+                grad_clip,
+                early_stop,
                 loss_type=loss_type,
                 fold_label=f"fold {fold+1}/{kfold}",
             )
             fold_scores.append(fold_acc)
             print(f"  Fold {fold+1}/{kfold}: acc={fold_acc:.4f}")
 
-        print(f"\nKFold {kfold}-fold: mean={np.mean(fold_scores):.4f} ± {np.std(fold_scores):.3f}")
+        print(
+            f"\nKFold {kfold}-fold: mean={np.mean(fold_scores):.4f} ± {np.std(fold_scores):.3f}"
+        )
         return None, None
 
     # ---- Single train/val run ----
     model, best_ckpt = _train_one_run(
-        X_train, y_train, X_val, y_val,
-        model_type, n_channels, n_classes, device,
-        epochs, batch_size, lr, label_smoothing, grad_clip, early_stop,
-        mixup_alpha=mixup_alpha, loss_type=loss_type,
+        X_train,
+        y_train,
+        X_val,
+        y_val,
+        model_type,
+        n_channels,
+        n_classes,
+        device,
+        epochs,
+        batch_size,
+        lr,
+        label_smoothing,
+        grad_clip,
+        early_stop,
+        mixup_alpha=mixup_alpha,
+        loss_type=loss_type,
         save_path=save_path,
     )
     return model, best_ckpt
 
 
 def _train_one_run(
-    X_train, y_train, X_val, y_val,
-    model_type, n_channels, n_classes, device,
-    epochs, batch_size, lr, label_smoothing, grad_clip, early_stop,
+    X_train,
+    y_train,
+    X_val,
+    y_val,
+    model_type,
+    n_channels,
+    n_classes,
+    device,
+    epochs,
+    batch_size,
+    lr,
+    label_smoothing,
+    grad_clip,
+    early_stop,
     mixup_alpha=0.0,
     loss_type="ce",
     save_path=None,
@@ -260,6 +319,7 @@ def _train_one_run(
     # ---- Multi-band preprocessing (FBCNet) ----
     if getattr(model, "input_requires_filter_bank", False):
         from models.fbcnet import apply_filter_bank
+
         print("Applying filter bank (9 bands)...")
         X_train = apply_filter_bank(X_train)
         X_val = apply_filter_bank(X_val)
@@ -278,7 +338,9 @@ def _train_one_run(
     val_loader = DataLoader(val_ds, batch_size=batch_size)
 
     # ---- Loss ----
-    class_weights = compute_class_weight("balanced", classes=np.unique(y_train), y=y_train)
+    class_weights = compute_class_weight(
+        "balanced", classes=np.unique(y_train), y=y_train
+    )
     class_weights = torch.tensor(class_weights, dtype=torch.float32, device=device)
 
     if loss_type == "focal":
@@ -309,6 +371,7 @@ def _train_one_run(
             # Mixup
             if mixup_alpha > 0:
                 from preprocessing.augment import mixup_batch, mixup_criterion
+
                 Xb_np = Xb.cpu().numpy()
                 yb_np = yb.cpu().numpy()
                 Xb_mixed, y_a, y_b, lam = mixup_batch(Xb_np, yb_np, alpha=mixup_alpha)
@@ -381,7 +444,8 @@ def _train_one_run(
                     "D": getattr(model, "D", 2),
                     "F2": getattr(model, "F2", 16),
                     "dropout": (
-                        model.drop1.p if hasattr(model, "drop1")
+                        model.drop1.p
+                        if hasattr(model, "drop1")
                         else getattr(model, "dropout", 0.5)
                     ),
                 },
@@ -413,18 +477,29 @@ def _train_one_run(
 
 
 def _train_one_fold(
-    X_train, y_train, X_val, y_val,
-    model_type, n_channels, n_classes, device,
-    epochs, batch_size, lr, label_smoothing, grad_clip, early_stop,
+    X_train,
+    y_train,
+    X_val,
+    y_val,
+    model_type,
+    n_channels,
+    n_classes,
+    device,
+    epochs,
+    batch_size,
+    lr,
+    label_smoothing,
+    grad_clip,
+    early_stop,
     loss_type="ce",
     fold_label="",
 ):
     """Train on one fold and return best validation accuracy (lightweight)."""
     # Multi-band preprocessing for FBCNet
-    model_temp = create_model(model_type, n_channels=n_channels,
-                               n_classes=n_classes)
+    model_temp = create_model(model_type, n_channels=n_channels, n_classes=n_classes)
     if getattr(model_temp, "input_requires_filter_bank", False):
         from models.fbcnet import apply_filter_bank
+
         X_train = apply_filter_bank(X_train)
         X_val = apply_filter_bank(X_val)
     del model_temp
@@ -438,7 +513,9 @@ def _train_one_fold(
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_ds, batch_size=batch_size)
 
-    model = create_model(model_type, n_channels=n_channels, n_classes=n_classes).to(device)
+    model = create_model(model_type, n_channels=n_channels, n_classes=n_classes).to(
+        device
+    )
 
     class_weights = compute_class_weight(
         "balanced", classes=np.unique(y_train), y=y_train
@@ -499,23 +576,56 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=LEARNING_RATE)
     parser.add_argument("--device", default=None)
     parser.add_argument("--save_path", default=None)
-    parser.add_argument("--model", default="eegnet",
-                        choices=["eegnet", "eegnet_se", "eegnet_mhsa",
-                                 "eegnet_temporal", "eegnet_spatiotemporal",
-                                 "fbcnet", "eeg_tcnet", "eeg_conformer"])
-    parser.add_argument("--augment", action="store_true", help="Apply data augmentation")
-    parser.add_argument("--mixup", type=float, default=0.0,
-                        help="Mixup alpha (0 = disabled, e.g. 0.2)")
-    parser.add_argument("--label_smoothing", type=float, default=0.0,
-                        help="Label smoothing factor (e.g., 0.1)")
-    parser.add_argument("--grad_clip", type=float, default=0.0,
-                        help="Gradient clipping max norm (0 = disabled)")
-    parser.add_argument("--early_stop", type=int, default=0,
-                        help="Early stopping patience (0 = disabled)")
-    parser.add_argument("--kfold", type=int, default=0,
-                        help="K-fold cross-validation (0 = disabled, use train/val split)")
-    parser.add_argument("--loss", default="ce", choices=["ce", "focal"],
-                        help="Loss function: ce (weighted cross-entropy) | focal (focal loss)")
+    parser.add_argument(
+        "--model",
+        default="eegnet",
+        choices=[
+            "eegnet",
+            "eegnet_se",
+            "eegnet_mhsa",
+            "eegnet_temporal",
+            "eegnet_spatiotemporal",
+            "fbcnet",
+            "eeg_tcnet",
+            "eeg_conformer",
+        ],
+    )
+    parser.add_argument(
+        "--augment", action="store_true", help="Apply data augmentation"
+    )
+    parser.add_argument(
+        "--mixup", type=float, default=0.0, help="Mixup alpha (0 = disabled, e.g. 0.2)"
+    )
+    parser.add_argument(
+        "--label_smoothing",
+        type=float,
+        default=0.0,
+        help="Label smoothing factor (e.g., 0.1)",
+    )
+    parser.add_argument(
+        "--grad_clip",
+        type=float,
+        default=0.0,
+        help="Gradient clipping max norm (0 = disabled)",
+    )
+    parser.add_argument(
+        "--early_stop",
+        type=int,
+        default=0,
+        help="Early stopping patience (0 = disabled)",
+    )
+    parser.add_argument(
+        "--kfold",
+        type=int,
+        default=0,
+        help="K-fold cross-validation (0 = disabled, use train/val split)",
+    )
+    parser.add_argument(
+        "--loss",
+        default="ce",
+        choices=["ce", "focal"],
+        help="Loss function: ce (weighted cross-entropy) | focal (focal loss)",
+    )
     args = parser.parse_args()
     train(
         data_dir=args.data_dir,

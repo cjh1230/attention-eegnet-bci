@@ -1,6 +1,7 @@
 """
 Evaluation metrics for multi-class MI classification.
 """
+
 import numpy as np
 from sklearn.metrics import (
     accuracy_score,
@@ -12,10 +13,30 @@ from sklearn.metrics import (
 )
 
 
+def _all_labels(y_true, y_pred) -> np.ndarray:
+    """Fixed label set 0..K-1 so confusion-matrix rows/cols map to class ids.
+
+    Without an explicit ``labels`` argument, ``confusion_matrix`` spans only the
+    classes actually present in the data. When a fold is missing a class (in the
+    ground truth or the predictions), the matrix shrinks and the row/column
+    indices silently shift, misaligning per-class metrics with their semantic
+    class names. Pinning ``labels`` to a contiguous 0..K-1 range keeps
+    ``enumerate`` indices equal to the true class id.
+
+    Only the confusion-matrix-based per-class helpers use this; the macro
+    accuracy/kappa/F1 scores are intentionally left as-is so their reported
+    values are unchanged.
+    """
+    y_true = np.asarray(y_true)
+    y_pred = np.asarray(y_pred)
+    hi = int(max(y_true.max(initial=0), y_pred.max(initial=0)))
+    return np.arange(hi + 1)
+
+
 def classification_report(y_true, y_pred):
     """Return dict of common metrics for BCI classification."""
 
-    cm = confusion_matrix(y_true, y_pred)
+    cm = confusion_matrix(y_true, y_pred, labels=_all_labels(y_true, y_pred))
     acc = accuracy_score(y_true, y_pred)
     kappa = cohen_kappa_score(y_true, y_pred)
     f1 = f1_score(y_true, y_pred, average="macro")
@@ -34,7 +55,7 @@ def classification_report(y_true, y_pred):
 
 def per_class_accuracy(y_true, y_pred):
     """Return per-class accuracy given integer labels."""
-    cm = confusion_matrix(y_true, y_pred)
+    cm = confusion_matrix(y_true, y_pred, labels=_all_labels(y_true, y_pred))
     row_sums = cm.sum(axis=1)
     row_sums = np.where(row_sums == 0, 1, row_sums)
     return np.diag(cm).astype(float) / row_sums
@@ -45,7 +66,7 @@ def per_class_recall(y_true, y_pred) -> dict[int, float]:
 
     Recall = TP / (TP + FN)
     """
-    cm = confusion_matrix(y_true, y_pred)
+    cm = confusion_matrix(y_true, y_pred, labels=_all_labels(y_true, y_pred))
     row_sums = cm.sum(axis=1)
     row_sums = np.where(row_sums == 0, 1, row_sums)
     recalls = np.diag(cm).astype(float) / row_sums
@@ -57,7 +78,7 @@ def per_class_specificity(y_true, y_pred) -> dict[int, float]:
 
     Specificity = TN / (TN + FP)  — true negative rate.
     """
-    cm = confusion_matrix(y_true, y_pred)
+    cm = confusion_matrix(y_true, y_pred, labels=_all_labels(y_true, y_pred))
     n_classes = cm.shape[0]
     total = cm.sum()
     specs = {}
@@ -76,7 +97,7 @@ def per_class_precision(y_true, y_pred) -> dict[int, float]:
 
     Precision = TP / (TP + FP)
     """
-    cm = confusion_matrix(y_true, y_pred)
+    cm = confusion_matrix(y_true, y_pred, labels=_all_labels(y_true, y_pred))
     col_sums = cm.sum(axis=0)
     col_sums = np.where(col_sums == 0, 1, col_sums)
     precisions = np.diag(cm).astype(float) / col_sums
